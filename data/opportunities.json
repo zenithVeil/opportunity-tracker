@@ -1,0 +1,409 @@
+[
+  {
+    "id": "sample-defcon-ctf-34",
+    "name": "DEF CON CTF 34 Qualifiers",
+    "websiteUrl": "https://defcon.org",
+    "registrationUrl": "https://scoreboard.defcon.org/register",
+    "category": "ctf",
+    "organization": "DEF CON / Order of the Overflow",
+    "deadline": "2026-09-14T23:59:00Z",
+    "eventDate": "2026-09-18",
+    "status": "Registered",
+    "notes": "Team credentials and VPN config will be distributed via Discord 2 hours before kickoff. Need to verify GDB-peda, Ghidra 11.2, and pwntools setup across team VMs.",
+    "tasks": [
+      {
+        "id": "t1",
+        "name": "Register team on CTF scoreboard",
+        "completed": true,
+        "priority": "high"
+      },
+      {
+        "id": "t2",
+        "name": "Verify team Discord channel access",
+        "completed": true,
+        "priority": "high"
+      },
+      {
+        "id": "t3",
+        "name": "Spin up shared cloud VM with Docker & Ghidra",
+        "completed": false,
+        "priority": "high",
+        "dueDate": "2026-09-13"
+      },
+      {
+        "id": "t4",
+        "name": "Review writeups from DEF CON 33 Quals",
+        "completed": false,
+        "priority": "medium"
+      },
+      {
+        "id": "t5",
+        "name": "Test WireGuard team VPN latency",
+        "completed": false,
+        "priority": "medium"
+      }
+    ],
+    "tags": [
+      "CTF",
+      "Pwn",
+      "Reverse Engineering",
+      "Crypto",
+      "Team"
+    ],
+    "reminderDaysBefore": [
+      14,
+      7,
+      3,
+      1,
+      0
+    ],
+    "provenance": {
+      "origin": "verified",
+      "verifiedByCheck": true
+    },
+    "tracking": {
+      "lastChecked": "2026-09-12T01:30:00Z",
+      "status": "active",
+      "statusCode": 200,
+      "contentHash": "hash-defcon-2026-09-12",
+      "verifiedInfo": {
+        "title": "DEF CON CTF 34 Qualifier Scoreboard",
+        "detectedDeadline": "2026-09-14",
+        "detectedEventDate": "2026-09-18",
+        "detectedStatus": "Registration Open",
+        "announcements": [
+          "Infrastructure testing window opens Sep 13 at 18:00 UTC."
+        ],
+        "summary": "Registration is live. Team size is uncapped for qualifiers. Qualification grants 1 of 16 finals berths."
+      },
+      "changeLog": [
+        {
+          "id": "c1",
+          "timestamp": "2026-09-10T14:20:00Z",
+          "field": "announcements",
+          "oldVal": "Dates tentative",
+          "newVal": "Infrastructure testing window opens Sep 13 at 18:00 UTC",
+          "description": "Official test window confirmed by CTF organizers."
+        }
+      ],
+      "failedAttemptsCount": 0
+    },
+    "isSample": true,
+    "createdAt": "2026-09-01T10:00:00Z",
+    "updatedAt": "2026-09-12T01:30:00Z"
+  },
+  {
+    "id": "sample-ethglobal-autumn-2026",
+    "name": "ETHGlobal Hackathon Autumn 2026",
+    "websiteUrl": "https://ethglobal.com",
+    "registrationUrl": "https://ethglobal.com/apply",
+    "category": "hackathon",
+    "organization": "ETHGlobal",
+    "deadline": "2026-09-18T23:59:00Z",
+    "eventDate": "2026-10-09",
+    "status": "Registered",
+    "notes": "Brainstorming decentralized zero-knowledge identity proof concept for web3 security. Bounties announced by Arbitrum, Base, and Uniswap Foundation ($150k pool).",
+    "tasks": [
+      {
+        "id": "t20",
+        "name": "Draft 1-paragraph project proposal",
+        "completed": true,
+        "priority": "high"
+      },
+      {
+        "id": "t21",
+        "name": "Submit hacker application with GitHub portfolio",
+        "completed": false,
+        "priority": "high",
+        "dueDate": "2026-09-16"
+      },
+      {
+        "id": "t22",
+        "name": "Find 2 team members with Solidity + ZK experience",
+        "completed": false,
+        "priority": "medium"
+      },
+      {
+        "id": "t23",
+        "name": "Review partner bounties and tech stacks",
+        "completed": false,
+        "priority": "low"
+      }
+    ],
+    "tags": [
+      "Web3",
+      "Zero-Knowledge",
+      "Solidity",
+      "Hackathon",
+      "Bounties"
+    ],
+    "reminderDaysBefore": [
+      14,
+      7,
+      3,
+      1,
+      0
+    ],
+    "provenance": {
+      "origin": "verified",
+      "verifiedByCheck": true
+    },
+    "tracking": {
+      "lastChecked": "2026-09-11T20:00:00Z",
+      "status": "active",
+      "statusCode": 200,
+      "contentHash": "hash-ethg-2026",
+      "verifiedInfo": {
+        "title": "ETHGlobal Autumn Hackathon 2026",
+        "detectedDeadline": "2026-09-18",
+        "detectedEventDate": "2026-10-09",
+        "detectedStatus": "Applications Open",
+        "announcements": [
+          "First wave of acceptances rolling out Sep 19."
+        ],
+        "summary": "In-person and virtual participation options available. Staked hacker format."
+      },
+      "changeLog": [],
+      "failedAttemptsCount": 0
+    },
+    "isSample": true,
+    "createdAt": "2026-09-02T12:00:00Z",
+    "updatedAt": "2026-09-12T15:29:27.771Z"
+  },
+  {
+    "id": "sample-google-summer-of-code",
+    "name": "Google Summer of Code 2027 Mentee Program",
+    "websiteUrl": "https://summerofcode.withgoogle.com",
+    "registrationUrl": "https://summerofcode.withgoogle.com/programs/2027",
+    "category": "program",
+    "organization": "Google Open Source",
+    "deadline": "2026-10-04T18:00:00Z",
+    "eventDate": "2027-05-01",
+    "status": "Interested",
+    "notes": "Aiming to contribute to LLVM, Rust compiler, or Chromium security tooling. Need to start contributing good first issues in October.",
+    "tasks": [
+      {
+        "id": "t30",
+        "name": "Browse previous mentoring organizations in Security/Compiler domain",
+        "completed": true,
+        "priority": "high"
+      },
+      {
+        "id": "t31",
+        "name": "Pick top 2 target open source repos",
+        "completed": false,
+        "priority": "high",
+        "dueDate": "2026-09-25"
+      },
+      {
+        "id": "t32",
+        "name": "Submit first pull request to target repo",
+        "completed": false,
+        "priority": "medium"
+      },
+      {
+        "id": "t33",
+        "name": "Connect with mentors on IRC/Zulip/Discord",
+        "completed": false,
+        "priority": "low"
+      }
+    ],
+    "tags": [
+      "Open Source",
+      "Mentorship",
+      "Google",
+      "Compilers",
+      "Stipend"
+    ],
+    "reminderDaysBefore": [
+      14,
+      7,
+      3,
+      1,
+      0
+    ],
+    "provenance": {
+      "origin": "extracted",
+      "verifiedByCheck": false
+    },
+    "tracking": {
+      "lastChecked": "2026-09-11T16:00:00Z",
+      "status": "active",
+      "statusCode": 200,
+      "contentHash": "hash-gsoc-2027",
+      "verifiedInfo": {
+        "title": "Google Summer of Code Official Portal",
+        "detectedDeadline": "2026-10-04",
+        "detectedStatus": "Timeline Announced",
+        "announcements": [
+          "New timeline published for organizations and student contributors."
+        ],
+        "summary": "12-week and 22-week project scopes available for contributors."
+      },
+      "changeLog": [],
+      "failedAttemptsCount": 0
+    },
+    "isSample": true,
+    "createdAt": "2026-09-05T09:00:00Z",
+    "updatedAt": "2026-09-11T16:00:00Z"
+  },
+  {
+    "id": "sample-usenix-security-grant",
+    "name": "USENIX Security '27 Student Diversity Grant",
+    "websiteUrl": "https://usenix.org/conference/usenixsecurity27",
+    "registrationUrl": "https://usenix.org/student-grants",
+    "category": "scholarship",
+    "organization": "USENIX Association",
+    "deadline": "2026-09-15T23:59:00Z",
+    "eventDate": "2027-08-11",
+    "status": "Applied",
+    "notes": "Grant covers full registration, travel, and 4 nights hotel for attending USENIX Security. Advisor letter of recommendation submitted on Sep 10.",
+    "tasks": [
+      {
+        "id": "t40",
+        "name": "Write 500-word statement of academic interest",
+        "completed": true,
+        "priority": "high"
+      },
+      {
+        "id": "t41",
+        "name": "Request recommendation letter from research advisor",
+        "completed": true,
+        "priority": "high"
+      },
+      {
+        "id": "t42",
+        "name": "Submit completed grant application form",
+        "completed": true,
+        "priority": "high"
+      },
+      {
+        "id": "t43",
+        "name": "Follow up on application receipt confirmation",
+        "completed": false,
+        "priority": "medium",
+        "dueDate": "2026-09-14"
+      }
+    ],
+    "tags": [
+      "Research",
+      "Academic",
+      "Cybersecurity",
+      "Travel Grant",
+      "USENIX"
+    ],
+    "reminderDaysBefore": [
+      14,
+      7,
+      3,
+      1,
+      0
+    ],
+    "provenance": {
+      "origin": "manual",
+      "verifiedByCheck": true
+    },
+    "tracking": {
+      "lastChecked": "2026-09-12T00:15:00Z",
+      "status": "active",
+      "statusCode": 200,
+      "contentHash": "hash-usenix-2027",
+      "verifiedInfo": {
+        "title": "USENIX Security Symposium 2027 Student Grants",
+        "detectedDeadline": "2026-09-15",
+        "detectedStatus": "Application Deadline Approaching",
+        "announcements": [
+          "Final deadline for round 1 travel grant consideration."
+        ],
+        "summary": "Decisions sent within 3 weeks of the deadline."
+      },
+      "changeLog": [],
+      "failedAttemptsCount": 0
+    },
+    "isSample": true,
+    "createdAt": "2026-09-03T11:00:00Z",
+    "updatedAt": "2026-09-12T00:15:00Z"
+  },
+  {
+    "id": "sample-black-hat-arsenal",
+    "name": "Black Hat USA 2027 Call for Tools (Arsenal)",
+    "websiteUrl": "https://blackhat.com",
+    "registrationUrl": "https://blackhat.com/cft-arsenal",
+    "category": "conference",
+    "organization": "Black Hat / Informa Tech",
+    "deadline": "2026-09-28T23:59:00Z",
+    "eventDate": "2027-08-07",
+    "status": "Interested",
+    "notes": "Submitting our open-source automated binary analysis and deobfuscation framework. Need to prepare 5-minute video demo and GitHub documentation.",
+    "tasks": [
+      {
+        "id": "t50",
+        "name": "Finalize README and installation instructions on GitHub",
+        "completed": false,
+        "priority": "high",
+        "dueDate": "2026-09-20"
+      },
+      {
+        "id": "t51",
+        "name": "Record 5-minute screencast demonstrating live tool use",
+        "completed": false,
+        "priority": "high",
+        "dueDate": "2026-09-24"
+      },
+      {
+        "id": "t52",
+        "name": "Complete speaker & tool submission questionnaire",
+        "completed": false,
+        "priority": "medium",
+        "dueDate": "2026-09-27"
+      }
+    ],
+    "tags": [
+      "Conference",
+      "Speaker",
+      "Open Source",
+      "Security Tools",
+      "Arsenal"
+    ],
+    "reminderDaysBefore": [
+      14,
+      7,
+      3,
+      1,
+      0
+    ],
+    "provenance": {
+      "origin": "verified",
+      "verifiedByCheck": true
+    },
+    "tracking": {
+      "lastChecked": "2026-09-11T12:00:00Z",
+      "status": "changed",
+      "statusCode": 200,
+      "contentHash": "hash-bh-arsenal-v2",
+      "verifiedInfo": {
+        "title": "Black Hat Arsenal - Call for Tools",
+        "detectedDeadline": "2026-09-28",
+        "detectedStatus": "Submissions Open",
+        "announcements": [
+          "Notice: Submission deadline extended by 1 week from Sep 21 to Sep 28!"
+        ],
+        "summary": "Open source security tools showcase in Las Vegas."
+      },
+      "changeLog": [
+        {
+          "id": "c2",
+          "timestamp": "2026-09-11T12:00:00Z",
+          "field": "deadline",
+          "oldVal": "2026-09-21",
+          "newVal": "2026-09-28",
+          "description": "Submission deadline extended by 1 week to Sep 28."
+        }
+      ],
+      "failedAttemptsCount": 0
+    },
+    "isSample": true,
+    "createdAt": "2026-09-04T15:00:00Z",
+    "updatedAt": "2026-09-11T12:00:00Z"
+  }
+]

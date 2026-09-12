@@ -1,0 +1,6 @@
+{
+  "name": "Opportunity Tracker",
+  "description": "Dedicated personal opportunity dashboard for tracking hackathons, CTFs, competitions, developer programs, scholarships, and conferences with live website monitoring, deadline countdowns, task checklists, and AI assistance.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
