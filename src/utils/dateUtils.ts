@@ -70,6 +70,19 @@ export function formatDate(dateStr: string | undefined): string {
 }
 
 /**
+ * Formats a date string into compact format like "Sep 20".
+ */
+export function formatShortMonthDay(dateStr: string | undefined): string {
+  if (!dateStr) return 'No date';
+  const d = parseDate(dateStr);
+  if (!d) return dateStr;
+  return d.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+/**
  * Formats a relative timestamp (e.g. "Just now", "5m ago", "2h ago", "Yesterday").
  */
 export function formatRelativeTime(isoStr: string | null | undefined): string {

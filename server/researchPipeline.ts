@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { execSync } from 'child_process';
 import { GoogleGenAI, Type } from '@google/genai';
 import {
   OpportunityCategory,
@@ -160,71 +161,107 @@ export async function discoverEventSources(query: string, targetUrl?: string): P
     return [];
   }
 
-  // Query DuckDuckGo HTML live search
+  // 1. Query DuckDuckGo Lite live search via curl POST
   try {
-    const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(cleanedQuery + ' official website hackathon competition registration')}`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const encoded = encodeURIComponent(cleanedQuery);
+    const curlCmd = `curl -s -L --max-time 6 -X POST -d "q=${encoded}" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" https://lite.duckduckgo.com/lite/`;
+    const rawHtml = execSync(curlCmd, { encoding: 'utf-8', timeout: 7000 });
 
-    const res = await fetch(searchUrl, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 OpportunityTrackerResearch/2.0',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
-    });
-    clearTimeout(timeoutId);
+    const linkRegex = /<a[^>]+href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+    let match: RegExpExecArray | null;
+    while ((match = linkRegex.exec(rawHtml)) !== null) {
+      const rawLink = match[1];
+      const title = match[2].replace(/<[^>]+>/g, '').trim();
 
-    if (res.ok) {
-      const html = await res.text();
-      const $ = cheerio.load(html);
-
-      $('.result').each((_, el) => {
-        const titleEl = $(el).find('.result__title a');
-        const title = titleEl.text().trim();
-        const rawLink = titleEl.attr('href') || '';
-        const snippet = $(el).find('.result__snippet').text().trim();
-
-        let finalUrl = rawLink;
-        if (rawLink.includes('uddg=')) {
-          const match = rawLink.match(/uddg=([^&]+)/);
-          if (match) {
-            try {
-              finalUrl = decodeURIComponent(match[1]);
-            } catch {
-              finalUrl = rawLink;
-            }
-          }
+      if (
+        rawLink &&
+        !rawLink.includes('duckduckgo.com') &&
+        !rawLink.includes('yandex.') &&
+        !rawLink.includes('bing.com')
+      ) {
+        if (!seenUrls.has(rawLink)) {
+          seenUrls.add(rawLink);
+          const { sourceType, isOfficial } = classifySourceType(rawLink, cleanedQuery);
+          discovered.push({
+            url: rawLink,
+            title: title || rawLink,
+            sourceType,
+            retrievedSuccessfully: false,
+            isOfficial,
+          });
         }
+      }
+    }
+  } catch (err: any) {
+    console.warn('Live search retrieval error (DuckDuckGo Lite):', err.message);
+  }
 
-        if (finalUrl && finalUrl.startsWith('http') && !seenUrls.has(finalUrl)) {
-          // Exclude generic search homepages or ad tracking
-          if (!finalUrl.includes('duckduckgo.com') && !finalUrl.includes('yandex.') && !finalUrl.includes('bing.com')) {
-            // Check relevance: at least one substantial keyword from cleanedQuery must be present
-            const keywords = cleanedQuery.toLowerCase().split(/\s+/).filter((k) => k.length >= 3);
-            const combinedText = `${title} ${snippet} ${finalUrl}`.toLowerCase();
-            const hasKeywordMatch = keywords.length === 0 || keywords.some((k) => combinedText.includes(k));
-
-            if (hasKeywordMatch) {
-              seenUrls.add(finalUrl);
-              const { sourceType, isOfficial } = classifySourceType(finalUrl, cleanedQuery);
+  // 2. CTFtime API for CTF / cybersecurity competitions
+  if (cleanedQuery.toLowerCase().includes('ctf') || cleanedQuery.toLowerCase().includes('black hat')) {
+    try {
+      const ctfRes = await fetch('https://ctftime.org/api/v1/events/?limit=15', {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OpportunityTracker/2.0' },
+        signal: AbortSignal.timeout(4000),
+      });
+      if (ctfRes.ok) {
+        const events: any[] = await ctfRes.json();
+        const terms = cleanedQuery.toLowerCase().split(/\s+/).filter((w) => w.length > 2 && w !== 'ctf');
+        for (const ev of events) {
+          const tLower = (ev.title || '').toLowerCase();
+          if (terms.some((term) => tLower.includes(term))) {
+            if (ev.url && !seenUrls.has(ev.url)) {
+              seenUrls.add(ev.url);
               discovered.push({
-                url: finalUrl,
-                title: title || finalUrl,
-                snippet,
-                sourceType,
+                url: ev.url,
+                title: ev.title,
+                snippet: `Official site for CTF event: ${ev.title}`,
+                sourceType: 'official_event_website',
                 retrievedSuccessfully: false,
-                isOfficial,
+                isOfficial: true,
+              });
+            }
+            if (ev.ctftime_url && !seenUrls.has(ev.ctftime_url)) {
+              seenUrls.add(ev.ctftime_url);
+              discovered.push({
+                url: ev.ctftime_url,
+                title: `${ev.title} on CTFtime`,
+                snippet: `CTFtime page for ${ev.title}`,
+                sourceType: 'trusted_secondary_source',
+                retrievedSuccessfully: false,
+                isOfficial: false,
               });
             }
           }
         }
+      }
+    } catch {}
+  }
+
+  // 3. Wikipedia API for program / initiative overviews
+  try {
+    const wikiRes = await fetch(
+      `https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(cleanedQuery)}&limit=3&format=json`,
+      { signal: AbortSignal.timeout(4000) }
+    );
+    if (wikiRes.ok) {
+      const wikiData = await wikiRes.json();
+      const urls = wikiData[3] || [];
+      const titles = wikiData[1] || [];
+      urls.forEach((u: string, idx: number) => {
+        if (u && !seenUrls.has(u)) {
+          seenUrls.add(u);
+          discovered.push({
+            url: u,
+            title: titles[idx] || u,
+            snippet: `Wikipedia overview article for ${cleanedQuery}`,
+            sourceType: 'trusted_secondary_source',
+            retrievedSuccessfully: false,
+            isOfficial: false,
+          });
+        }
       });
     }
-  } catch (err: any) {
-    console.warn('Live search retrieval error (DuckDuckGo):', err.message);
-  }
+  } catch {}
 
   // Sort discovered sources by priority (Official event website first, then registration, docs, announcements, secondary)
   discovered.sort((a, b) => {
@@ -436,67 +473,75 @@ ${sourceSummaries}
 
 Extract structured information strictly adhering to this schema:`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              name: { type: Type.STRING },
-              nameQuote: { type: Type.STRING },
-              organization: { type: Type.STRING },
-              organizationQuote: { type: Type.STRING },
-              category: {
-                type: Type.STRING,
-                enum: ['hackathon', 'ctf', 'workshop', 'competition', 'program', 'scholarship', 'internship', 'conference', 'fellowship', 'grant', 'other'],
-              },
-              description: { type: Type.STRING },
-              deadline: { type: Type.STRING, description: 'YYYY-MM-DD or exact date text found in source, or null if not stated' },
-              deadlineQuote: { type: Type.STRING, description: 'Exact quote from text mentioning the deadline' },
-              eventDate: { type: Type.STRING, description: 'YYYY-MM-DD or exact event dates found in source, or null' },
-              eventDateQuote: { type: Type.STRING, description: 'Exact quote from text mentioning event date' },
-              registrationStatus: {
-                type: Type.STRING,
-                enum: ['Open', 'Closed', 'Upcoming', 'Unknown'],
-              },
-              registrationStatusQuote: { type: Type.STRING, description: 'Exact quote or button text indicating status' },
-              officialWebsite: { type: Type.STRING },
-              registrationUrl: { type: Type.STRING },
-              conflictingDeadlines: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    value: { type: Type.STRING },
-                    sourceUrl: { type: Type.STRING },
-                    quote: { type: Type.STRING },
+      const modelsToTry = ['gemini-3.6-flash', 'gemini-3.8-flash'];
+      for (const m of modelsToTry) {
+        try {
+          const response = await ai.models.generateContent({
+            model: m,
+            contents: prompt,
+            config: {
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  name: { type: Type.STRING },
+                  nameQuote: { type: Type.STRING },
+                  organization: { type: Type.STRING },
+                  organizationQuote: { type: Type.STRING },
+                  category: {
+                    type: Type.STRING,
+                    enum: ['hackathon', 'ctf', 'workshop', 'competition', 'program', 'scholarship', 'internship', 'conference', 'fellowship', 'grant', 'other'],
+                  },
+                  description: { type: Type.STRING },
+                  deadline: { type: Type.STRING, description: 'YYYY-MM-DD or exact date text found in source, or null if not stated' },
+                  deadlineQuote: { type: Type.STRING, description: 'Exact quote from text mentioning the deadline' },
+                  eventDate: { type: Type.STRING, description: 'YYYY-MM-DD or exact event dates found in source, or null' },
+                  eventDateQuote: { type: Type.STRING, description: 'Exact quote from text mentioning event date' },
+                  registrationStatus: {
+                    type: Type.STRING,
+                    enum: ['Open', 'Closed', 'Upcoming', 'Unknown'],
+                  },
+                  registrationStatusQuote: { type: Type.STRING, description: 'Exact quote or button text indicating status' },
+                  officialWebsite: { type: Type.STRING },
+                  registrationUrl: { type: Type.STRING },
+                  conflictingDeadlines: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        value: { type: Type.STRING },
+                        sourceUrl: { type: Type.STRING },
+                        quote: { type: Type.STRING },
+                      },
+                    },
+                  },
+                  suggestedTasks: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        name: { type: Type.STRING },
+                        priority: { type: Type.STRING, enum: ['low', 'medium', 'high'] },
+                      },
+                    },
+                  },
+                  suggestedTags: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
                   },
                 },
               },
-              suggestedTasks: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    name: { type: Type.STRING },
-                    priority: { type: Type.STRING, enum: ['low', 'medium', 'high'] },
-                  },
-                },
-              },
-              suggestedTags: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-              },
+              temperature: 0.1,
             },
-          },
-          temperature: 0.1,
-        },
-      });
+          });
 
-      if (response.text) {
-        extractedRaw = JSON.parse(response.text);
+          if (response.text) {
+            extractedRaw = JSON.parse(response.text);
+            break;
+          }
+        } catch (mErr: any) {
+          console.warn(`Extraction model ${m} attempt failed:`, mErr.message || mErr);
+        }
       }
     } catch (err: any) {
       console.warn('Gemini extraction error in research pipeline:', err.message);
@@ -524,13 +569,20 @@ Extract structured information strictly adhering to this schema:`;
     quoteSnippet: extractedRaw.nameQuote || primary.title,
   };
 
+  const isValidDateString = (val?: string): boolean => {
+    if (!val) return false;
+    const v = val.trim().toLowerCase();
+    if (['low', 'medium', 'high', 'null', 'unknown', 'none', 'n/a', 'undefined', 'tbd', 'could not verify'].includes(v)) return false;
+    return /\d/.test(v);
+  };
+
   // 2. Deadline Verification
   let deadlineField: VerifiedField<string>;
   const rawDeadline = extractedRaw.deadline?.trim();
   const deadlineQuote = extractedRaw.deadlineQuote?.trim();
 
   // If a deadline was detected, verify whether the quote actually exists in the retrieved source
-  if (rawDeadline && rawDeadline.toLowerCase() !== 'null') {
+  if (rawDeadline && isValidDateString(rawDeadline)) {
     const isQuoteVerified = deadlineQuote && combinedTextLower.includes(deadlineQuote.toLowerCase().slice(0, 25));
     const conflicts: FieldSourceConflict[] = [];
 
@@ -602,7 +654,7 @@ Extract structured information strictly adhering to this schema:`;
   // 4. Event Date Verification
   let eventDateField: VerifiedField<string>;
   const rawEventDate = extractedRaw.eventDate?.trim();
-  if (rawEventDate && rawEventDate.toLowerCase() !== 'null') {
+  if (rawEventDate && isValidDateString(rawEventDate)) {
     eventDateField = {
       value: rawEventDate,
       sourceUrl: primaryUrl,

@@ -13,6 +13,7 @@ import {
   formatDate,
   formatCountdown,
   formatRelativeTime,
+  formatShortMonthDay,
 } from '../utils/dateUtils';
 import {
   AlertTriangle,
@@ -316,7 +317,37 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <>
+          {/* Mobile Home-Screen Opportunity Cards (Minimal Design per specification) */}
+          <div className="md:hidden flex flex-col gap-2">
+            {displayedList.map((opp) => {
+              const days = getDaysRemaining(opp.deadline);
+              const alertColor = days <= 3 ? '🔴' : days <= 10 ? '🟠' : '🟢';
+              const formattedDate = formatShortMonthDay(opp.deadline);
+
+              return (
+                <div
+                  key={`mobile-${opp.id}`}
+                  id={`mobile-opp-card-${opp.id}`}
+                  onClick={() => onSelectOpportunity(opp)}
+                  className="w-full flex items-center justify-between px-4 py-3.5 rounded-xl border border-[#1e293b] bg-[#0c101a] active:bg-[#151c2e] hover:border-slate-700 transition-colors cursor-pointer min-h-[52px] select-none"
+                >
+                  <span className="text-sm font-medium text-white truncate pr-3">
+                    {opp.name}
+                  </span>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className="text-xs leading-none">{alertColor}</span>
+                    <span className="text-xs font-mono font-medium text-slate-300">
+                      {formattedDate}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Desktop Opportunity Cards Grid */}
+          <div className="hidden md:grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {displayedList.map((opp) => {
             const urgency = getUrgencyLevel(opp.deadline);
             const urgencyConfig = getUrgencyBadgeConfig(urgency);
@@ -512,6 +543,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             );
           })}
         </div>
+        </>
       )}
     </div>
   );

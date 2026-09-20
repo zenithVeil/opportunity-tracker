@@ -578,8 +578,8 @@ DIRECTIVES:
    \`\`\`
 4. If it's a question about existing data, answer immediately and directly with no code block.`;
 
-      // Try gemini-2.5-flash first for high speed and availability, then gemini-3.8-flash
-      const models = ['gemini-2.5-flash', 'gemini-3.8-flash'];
+      // Try gemini-3.6-flash first for high speed and reliability, then gemini-3.8-flash
+      const models = ['gemini-3.6-flash', 'gemini-3.8-flash'];
       for (const model of models) {
         try {
           const response = await ai.models.generateContent({
@@ -661,8 +661,8 @@ export async function transcribeAudioWithGemini(
     };
   }
 
-  // Support models with multimodal audio: gemini-2.5-flash and gemini-3.8-flash
-  const models = ['gemini-2.5-flash', 'gemini-3.8-flash'];
+  // Support models with multimodal audio capabilities
+  const models = ['gemini-3.6-flash', 'gemini-3.5-transcribe', 'gemini-3.8-flash'];
   let lastError = '';
 
   for (const model of models) {

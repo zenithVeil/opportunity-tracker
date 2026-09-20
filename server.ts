@@ -955,7 +955,11 @@ app.post('/api/assistant/chat', async (req, res) => {
       lowerQ.includes('i applied');
 
     const isResearchTrigger =
+      /^tell\s+me\s+about\b/i.test(lowerQ) ||
+      /^what\s+is\b/i.test(lowerQ) ||
+      /^check\b/i.test(lowerQ) ||
       /^find\s+(?:this\s+event|details|info|hackathon|ctf|competition|conference)\b/i.test(lowerQ) ||
+      /^find\s+details\b/i.test(lowerQ) ||
       /^get\s+details\b/i.test(lowerQ) ||
       /^is\s+registration\s+open\b/i.test(lowerQ) ||
       /^are\s+applications\s+open\b/i.test(lowerQ) ||
@@ -966,7 +970,12 @@ app.post('/api/assistant/chat', async (req, res) => {
       /details\s+(?:about|on|for)\b/i.test(lowerQ) ||
       /deadline\s+(?:for|of)\b/i.test(lowerQ) ||
       /registration\s+(?:for|status\s+of)\b/i.test(lowerQ) ||
-      (/(?:find|lookup|check)\s+[a-z0-9]/i.test(lowerQ) && (lowerQ.includes('hackathon') || lowerQ.includes('ctf') || lowerQ.includes('fellowship') || lowerQ.includes('competition')));
+      (/(?:find|lookup|check)\s+[a-z0-9]/i.test(lowerQ) && (lowerQ.includes('hackathon') || lowerQ.includes('ctf') || lowerQ.includes('fellowship') || lowerQ.includes('competition') || lowerQ.includes('conference'))) ||
+      lowerQ.includes('ctf') ||
+      lowerQ.includes('hackathon') ||
+      lowerQ.includes('black hat') ||
+      lowerQ.includes('summer of code') ||
+      lowerQ.includes('gsoc');
 
     if (!isPersonalTrackerQuery && isResearchTrigger) {
       try {
@@ -975,63 +984,78 @@ app.post('/api/assistant/chat', async (req, res) => {
         let replyText = '';
 
         if (research.overallState === 'unable_to_verify') {
-          replyText = `🔎 **Researching current information...**\nSources found: 0\n\n` +
-            `**Could not verify this information.**\n\n` +
-            `No authoritative source could be discovered for "${message}".\n` +
-            `Per strict verification rules, I will not guess or fabricate deadlines, URLs, or registration statuses. If you have the direct website link, you can paste it and I will analyze the live page.`;
+          replyText = `Could not verify this information.\n\n` +
+            `Name:\n${research.eventName.value || message}\n\n` +
+            `Organization:\nCould not verify\n\n` +
+            `Deadline:\nCould not verify\n\n` +
+            `Event date:\nCould not verify\n\n` +
+            `Registration:\nCould not verify\n\n` +
+            `Source:\nNone discovered\n\n` +
+            `Last checked:\n${new Date(research.retrievalTimestamp).toLocaleString('en-US')}\n\n` +
+            `Verification:\nUnverified\n\n` +
+            `No authoritative sources could be retrieved. I will not guess or fabricate deadlines or registration links. If you have the direct website link, paste it and I will analyze the live page.`;
         } else {
-          const deadlineVerified = research.deadline.verificationStatus === 'verified' && research.deadline.value;
-          const regVerified = research.registrationStatus.verificationStatus === 'verified';
-
-          const formatSourceTypeLabel = (st: string) => {
-            switch (st) {
-              case 'official_event_website': return 'official event website';
-              case 'official_registration_page': return 'official registration page';
-              case 'official_rules_documentation': return 'official rules / documentation';
-              case 'official_organization_announcement': return 'official announcement';
-              case 'trusted_secondary_source': return 'trusted secondary source';
-              default: return 'verified web source';
-            }
-          };
-
-          replyText = `🔎 **Researching current information...**\nSources found: ${research.sourcesDiscovered.length}\n\n` +
-            `### ${research.eventName.value}\n` +
-            (research.organization.value ? `**Organization:** ${research.organization.value}\n\n` : '') +
-            `**Deadline:**\n` +
-            (deadlineVerified
-              ? `${research.deadline.value}\n✓ Verified from ${formatSourceTypeLabel(research.deadline.sourceType)}\n\n`
-              : research.deadline.verificationStatus === 'conflict'
-              ? `⚠ Conflicting deadlines detected across sources\n\n`
-              : `⚠ Deadline could not be verified.\n\n`) +
-            `**Registration:**\n` +
-            `${research.registrationStatus.value}\n` +
-            (regVerified ? `✓ Verified\n\n` : `⚠ Status could not be verified\n\n`) +
-            (research.eventDate.value
-              ? `**Event date:**\n${research.eventDate.value}\n✓ Verified\n\n`
-              : '') +
-            (research.officialWebsite.value
-              ? `**Official website:**\n[${research.officialWebsite.value}](${research.officialWebsite.value})\n\n`
-              : '');
-
+          const verifiedName = research.eventName.value || message;
+          const verifiedOrg = research.organization.value || 'Could not verify';
+          
+          let verifiedDeadline = 'Could not verify';
           if (research.deadline.conflicts && research.deadline.conflicts.length > 0) {
-            replyText += `⚠ **Source Disagreement:**\n` +
-              `• Primary: ${research.deadline.value} (${research.deadline.sourceUrl})\n` +
-              research.deadline.conflicts.map((c) => `• Discrepancy: ${c.value} (${c.sourceUrl})`).join('\n') +
-              `\n\n`;
+            verifiedDeadline = 'Source conflict detected';
+          } else if (research.deadline.verificationStatus === 'verified' && research.deadline.value) {
+            verifiedDeadline = research.deadline.value;
           }
 
-          // Build proposal to add to tracker
+          const verifiedEventDate = research.eventDate.value || 'Could not verify';
+          const verifiedReg = research.registrationUrl.value || research.officialWebsite.value || 'Could not verify';
+          const primarySourceUrl = research.sourcesDiscovered[0]?.url || research.officialWebsite.value || 'Could not verify';
+          const lastCheckedTime = new Date(research.retrievalTimestamp).toLocaleString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+          });
+
+          const hasConflicts = Boolean(
+            (research.deadline.conflicts && research.deadline.conflicts.length > 0) ||
+            research.deadline.verificationStatus === 'conflict'
+          );
+
+          const verificationLabel =
+            hasConflicts
+              ? 'Conflict'
+              : research.overallState === 'verified'
+              ? 'Verified'
+              : 'Retrieved';
+
+          replyText = `I found the official information.\n\n` +
+            `Name:\n${verifiedName}\n\n` +
+            `Organization:\n${verifiedOrg}\n\n` +
+            `Deadline:\n${verifiedDeadline}\n\n` +
+            `Event date:\n${verifiedEventDate}\n\n` +
+            `Registration:\n${verifiedReg}\n\n` +
+            `Source:\n${primarySourceUrl}\n\n` +
+            `Last checked:\n${lastCheckedTime}\n\n` +
+            `Verification:\n${verificationLabel}`;
+
+          if (research.deadline.conflicts && research.deadline.conflicts.length > 0) {
+            replyText += `\n\n⚠ **Source conflict detected.**\n` +
+              `• Primary (${research.deadline.sourceUrl}): ${research.deadline.value}\n` +
+              research.deadline.conflicts.map((c) => `• Discrepancy (${c.sourceUrl}): ${c.value}`).join('\n');
+          }
+
+          // Propose adding to tracker
           const oppPayload: Partial<Opportunity> = {
-            name: research.eventName.value,
+            name: research.eventName.value || verifiedName,
             websiteUrl: research.officialWebsite.value || research.sourcesDiscovered[0]?.url || '',
             registrationUrl: research.registrationUrl.value || '',
-            category: research.category.value,
-            organization: research.organization.value,
-            deadline: research.deadline.value || new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10),
+            category: research.category.value || 'competition',
+            organization: research.organization.value || '',
+            deadline: (research.deadline.value && research.deadline.value !== 'null' && /\d/.test(research.deadline.value)) ? research.deadline.value : new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10),
             eventDate: research.eventDate.value || undefined,
-            notes: research.description.value,
-            tags: research.suggestedTags,
-            tasks: research.suggestedTasks.map((t, idx) => ({
+            notes: research.description.value || `Researched from ${primarySourceUrl}`,
+            tags: research.suggestedTags || ['verified-event'],
+            tasks: (research.suggestedTasks || []).map((t, idx) => ({
               id: `task_${Date.now()}_${idx}`,
               name: t.name,
               priority: t.priority as any,
@@ -1051,14 +1075,18 @@ app.post('/api/assistant/chat', async (req, res) => {
             researchState: research.overallState,
           };
 
+          const deadlineDisplay = (research.deadline.value && /\d/.test(research.deadline.value)) ? research.deadline.value : 'TBD';
+
           proposals.push({
             id: `prop_add_${Date.now()}`,
             type: 'create_opportunity',
-            title: `Add ${research.eventName.value} to Tracker`,
-            description: `Add verified ${research.category.value} (${research.organization.value || 'Opportunity'}) with deadline ${research.deadline.value || 'TBD'}`,
+            title: `Add ${verifiedName} to Tracker`,
+            description: `Add ${research.category.value || 'opportunity'} (Deadline: ${deadlineDisplay})`,
             payload: oppPayload,
             status: 'pending',
           });
+
+          replyText += `\n\nWould you like me to add **${verifiedName}** to your tracker? Say **"Add it"** or **"OK"** to save.`;
         }
 
         res.json({

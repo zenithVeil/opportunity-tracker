@@ -78,6 +78,7 @@ export const AiAssistantDrawer: React.FC<AiAssistantDrawerProps> = ({
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedMimeTypeRef = useRef<string>('audio/webm');
   const audioChunksRef = useRef<Blob[]>([]);
   const spokenTranscriptRef = useRef<string>('');
 
@@ -108,7 +109,41 @@ export const AiAssistantDrawer: React.FC<AiAssistantDrawerProps> = ({
       userSpokenTranscript: spoken ? textToSend : undefined,
     };
 
-    setMessages((prev) => [...prev, userMsg]);
+    const isResearchQuery = (txt: string) => {
+      const l = txt.toLowerCase();
+      return (
+        l.startsWith('tell me about') ||
+        l.startsWith('what is') ||
+        l.startsWith('check') ||
+        l.startsWith('find') ||
+        l.startsWith('research') ||
+        l.startsWith('look up') ||
+        l.startsWith('lookup') ||
+        l.startsWith('search for') ||
+        l.includes('details about') ||
+        l.includes('details on') ||
+        l.includes('deadline for') ||
+        l.includes('registration for') ||
+        l.includes('ctf') ||
+        l.includes('hackathon') ||
+        l.includes('black hat') ||
+        l.includes('gsoc') ||
+        l.includes('summer of code')
+      );
+    };
+
+    // Instant acknowledgment for research queries before pipeline runs
+    const newMessages: ChatMessage[] = [userMsg];
+    if (isResearchQuery(textToSend) && !activeProposal) {
+      newMessages.push({
+        id: `ack_${Date.now()}`,
+        sender: 'assistant',
+        text: "Sure 👍 I'll check the current official information.",
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      });
+    }
+
+    setMessages((prev) => [...prev, ...newMessages]);
     setInput('');
     setIsLoading(true);
 
@@ -279,7 +314,23 @@ export const AiAssistantDrawer: React.FC<AiAssistantDrawerProps> = ({
     try {
       setMicState('listening');
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
+
+      // Determine best supported MIME type across browsers (Chrome, Safari, Firefox, Edge)
+      let chosenMime = 'audio/webm';
+      if (typeof MediaRecorder !== 'undefined') {
+        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+          chosenMime = 'audio/webm;codecs=opus';
+        } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+          chosenMime = 'audio/webm';
+        } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+          chosenMime = 'audio/mp4';
+        } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
+          chosenMime = 'audio/ogg';
+        }
+      }
+      recordedMimeTypeRef.current = chosenMime;
+
+      const mediaRecorder = new MediaRecorder(stream, chosenMime ? { mimeType: chosenMime } : undefined);
       mediaRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = (e) => {
@@ -357,7 +408,8 @@ export const AiAssistantDrawer: React.FC<AiAssistantDrawerProps> = ({
         if (!transcript && audioChunksRef.current.length > 0) {
           setMicState('transcribing');
           try {
-            const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+            const rawMime = recordedMimeTypeRef.current || 'audio/webm';
+            const blob = new Blob(audioChunksRef.current, { type: rawMime });
             const reader = new FileReader();
             const base64Audio: string = await new Promise((resolve) => {
               reader.onloadend = () => {
@@ -367,7 +419,8 @@ export const AiAssistantDrawer: React.FC<AiAssistantDrawerProps> = ({
               reader.readAsDataURL(blob);
             });
 
-            const transResult = await api.transcribeAudio(base64Audio, blob.type || 'audio/webm');
+            const cleanMime = rawMime.split(';')[0];
+            const transResult = await api.transcribeAudio(base64Audio, cleanMime);
             if (transResult.success && transResult.transcription) {
               transcript = transResult.transcription.trim();
             }
@@ -384,7 +437,7 @@ export const AiAssistantDrawer: React.FC<AiAssistantDrawerProps> = ({
         } else {
           setMicNotice('No speech was detected. Please try again or type your request.');
         }
-      }, 400);
+      }, 350);
     } else {
       setMicState('idle');
     }
