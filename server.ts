@@ -18,7 +18,7 @@ import {
   QuickCaptureClassification,
   ResearchEventResult,
 } from './src/types.js';
-import { runEventResearchPipeline } from './server/researchPipeline.js';
+import { runEventResearchPipeline, fetchHtmlWithFallbacks } from './server/researchPipeline.js';
 import {
   processAssistantQuery,
   transcribeAudioWithGemini,
@@ -403,28 +403,13 @@ app.post('/api/tracking/check/:id', async (req, res) => {
   }
 
   try {
-    // Perform server-side fetch with timeout
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 9000); // 9-second timeout
+    // Perform resilient server-side fetch with fallbacks (handles TLS mismatches, www. subdomain cert issues, etc.)
+    const fetchResult = await fetchHtmlWithFallbacks(validUrl.toString(), 9000);
 
-    let fetchResponse: Response;
-    try {
-      fetchResponse = await fetch(validUrl.toString(), {
-        signal: controller.signal,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 OpportunityTrackerBot/1.0',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-        },
-      });
-    } finally {
-      clearTimeout(timeoutId);
-    }
-
-    if (!fetchResponse.ok) {
+    if (!fetchResult) {
       opp.tracking.status = 'error';
-      opp.tracking.statusCode = fetchResponse.status;
-      opp.tracking.errorMessage = `Unable to check website (HTTP ${fetchResponse.status} ${fetchResponse.statusText})`;
+      opp.tracking.statusCode = 502;
+      opp.tracking.errorMessage = `Unable to connect to website (network or SSL error)`;
       opp.tracking.lastChecked = new Date().toISOString();
       opp.tracking.failedAttemptsCount = (opp.tracking.failedAttemptsCount || 0) + 1;
 
@@ -437,7 +422,7 @@ app.post('/api/tracking/check/:id', async (req, res) => {
           opportunityId: opp.id,
           opportunityName: opp.name,
           title: 'Website Monitoring Alert',
-          message: `Unable to access website for "${opp.name}" repeatedly (HTTP ${fetchResponse.status}).`,
+          message: `Unable to access website for "${opp.name}" repeatedly.`,
           timestamp: new Date().toISOString(),
           read: false,
           urgency: 'medium',
@@ -450,7 +435,7 @@ app.post('/api/tracking/check/:id', async (req, res) => {
       return;
     }
 
-    const html = await fetchResponse.text();
+    const html = fetchResult.html;
     const { title, metaDescription, text } = extractTextFromHtml(html);
     const newHash = computeHash(`${title}|${metaDescription}|${text.slice(0, 1500)}`);
     const checkedAt = new Date().toISOString();
@@ -585,7 +570,7 @@ Extract with high precision:
     opp.tracking = {
       lastChecked: checkedAt,
       status: isChanged ? 'changed' : 'active',
-      statusCode: fetchResponse.status,
+      statusCode: fetchResult.status,
       contentHash: newHash,
       errorMessage: undefined,
       failedAttemptsCount: 0,
@@ -641,21 +626,12 @@ app.post('/api/tracking/check-all', async (req, res) => {
 
   for (const opp of trackable.slice(0, 10)) { // limit batch size to 10 for speed
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 6000);
-
-      const resp = await fetch(opp.websiteUrl, {
-        signal: controller.signal,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 OpportunityTrackerBot/1.0',
-        },
-      });
-      clearTimeout(timeoutId);
-
+      const fetchResult = await fetchHtmlWithFallbacks(opp.websiteUrl, 6000);
       const checkedAt = new Date().toISOString();
-      if (resp.ok) {
+
+      if (fetchResult) {
         checkedCount++;
-        const html = await resp.text();
+        const html = fetchResult.html;
         const { title, text } = extractTextFromHtml(html);
         const newHash = computeHash(`${title}|${text.slice(0, 1000)}`);
         const prevHash = opp.tracking.contentHash;
@@ -668,12 +644,12 @@ app.post('/api/tracking/check-all', async (req, res) => {
         }
         opp.tracking.lastChecked = checkedAt;
         opp.tracking.contentHash = newHash;
-        opp.tracking.statusCode = resp.status;
+        opp.tracking.statusCode = fetchResult.status;
         opp.tracking.errorMessage = undefined;
       } else {
         errorCount++;
         opp.tracking.status = 'error';
-        opp.tracking.errorMessage = `Unable to check website (HTTP ${resp.status})`;
+        opp.tracking.errorMessage = `Unable to connect to website`;
         opp.tracking.lastChecked = checkedAt;
       }
     } catch {

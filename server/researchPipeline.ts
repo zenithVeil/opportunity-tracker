@@ -281,33 +281,100 @@ export async function discoverEventSources(query: string, targetUrl?: string): P
 }
 
 /**
+ * Normalizes event URLs (e.g. cleans leading/trailing whitespace, strips invalid www on multi-subdomains like www.capturetheflag.withgoogle.com)
+ */
+export function normalizeEventUrl(rawUrl: string): string {
+  try {
+    let u = rawUrl.trim();
+    if (!u.startsWith('http://') && !u.startsWith('https://')) {
+      u = 'https://' + u;
+    }
+    const parsed = new URL(u);
+    // If hostname starts with 'www.' and has >= 3 dot parts (e.g., www.capturetheflag.withgoogle.com),
+    // strip the 'www.' because multi-level subdomains rarely have valid certs for 'www.'
+    const hostParts = parsed.hostname.split('.');
+    if (hostParts.length > 3 && hostParts[0].toLowerCase() === 'www') {
+      parsed.hostname = hostParts.slice(1).join('.');
+    }
+    return parsed.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
+/**
+ * Resilient multi-step HTML retrieval.
+ * Tries normalized URL, alternate hostnames (without www / with www), and falls back to curl
+ * with insecure TLS (-k) for student hackathons/CTFs with misconfigured or expired SSL certs.
+ */
+export async function fetchHtmlWithFallbacks(
+  targetUrl: string,
+  timeoutMs = 9000
+): Promise<{ html: string; finalUrl: string; status: number } | null> {
+  const normalized = normalizeEventUrl(targetUrl);
+  const candidates: string[] = [normalized];
+
+  if (normalized !== targetUrl) {
+    candidates.push(targetUrl);
+  } else if (normalized.includes('://www.')) {
+    candidates.push(normalized.replace('://www.', '://'));
+  }
+
+  // 1. Try native fetch with abort signal
+  for (const cand of candidates) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const res = await fetch(cand, {
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 OpportunityTrackerResearch/2.0',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+      });
+      clearTimeout(timer);
+      if (res.ok) {
+        const html = await res.text();
+        return { html, finalUrl: cand, status: res.status };
+      }
+    } catch {
+      // Continue to next candidate or curl fallback
+    }
+  }
+
+  // 2. Fallback to curl with -k (insecure TLS) for tricky student/hackathon/CTF certs
+  try {
+    const escapedUrl = candidates[0].replace(/"/g, '\\"');
+    const curlCmd = `curl -s -L -k --max-time 7 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36" "${escapedUrl}"`;
+    const html = execSync(curlCmd, { encoding: 'utf-8', timeout: 8000 });
+    if (html && html.length > 50) {
+      return { html, finalUrl: candidates[0], status: 200 };
+    }
+  } catch {
+    // curl failed
+  }
+
+  return null;
+}
+
+/**
  * Step 3 & 4: Retrieve the actual webpage and handle JS-rendered SPAs
  * via JSON-LD, Next.js / Nuxt hydration state, meta tags, and structured DOM extraction.
  */
 export async function retrieveSourceContent(source: ResearchSourceItem): Promise<ScrapedSourceContent | null> {
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 9000);
-
-    const res = await fetch(source.url, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 OpportunityTrackerResearch/2.0',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
-    });
-    clearTimeout(timeoutId);
-
-    source.httpStatus = res.status;
-    if (!res.ok) {
+    const fetched = await fetchHtmlWithFallbacks(source.url);
+    if (!fetched) {
       source.retrievedSuccessfully = false;
       return null;
     }
 
-    const html = await res.text();
+    source.url = fetched.finalUrl;
+    source.httpStatus = fetched.status;
     source.retrievedSuccessfully = true;
 
+    const html = fetched.html;
     const $ = cheerio.load(html);
 
     // 1. Extract Title
@@ -473,7 +540,8 @@ ${sourceSummaries}
 
 Extract structured information strictly adhering to this schema:`;
 
-      const modelsToTry = ['gemini-3.6-flash', 'gemini-3.8-flash'];
+      // Prioritize gemini-3.8-flash for structured extraction, followed by flash aliases
+      const modelsToTry = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
       for (const m of modelsToTry) {
         try {
           const response = await ai.models.generateContent({
@@ -540,7 +608,13 @@ Extract structured information strictly adhering to this schema:`;
             break;
           }
         } catch (mErr: any) {
-          console.warn(`Extraction model ${m} attempt failed:`, mErr.message || mErr);
+          const errStr = String(mErr?.message || mErr);
+          const is503 = errStr.includes('503') || errStr.includes('UNAVAILABLE') || errStr.includes('high demand');
+          if (is503) {
+            console.warn(`Extraction model ${m} is temporarily experiencing high demand (503). Trying fallback model...`);
+          } else {
+            console.warn(`Extraction model ${m} attempt failed:`, mErr.message || mErr);
+          }
         }
       }
     } catch (err: any) {

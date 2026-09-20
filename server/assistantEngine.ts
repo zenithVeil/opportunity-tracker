@@ -578,8 +578,8 @@ DIRECTIVES:
    \`\`\`
 4. If it's a question about existing data, answer immediately and directly with no code block.`;
 
-      // Try gemini-3.6-flash first for high speed and reliability, then gemini-3.8-flash
-      const models = ['gemini-3.6-flash', 'gemini-3.8-flash'];
+      // Prioritize gemini-3.8-flash first for high speed and reliability, then gemini-flash-latest, gemini-3.1-flash-lite
+      const models = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
       for (const model of models) {
         try {
           const response = await ai.models.generateContent({
@@ -625,7 +625,13 @@ DIRECTIVES:
             };
           }
         } catch (modelErr: any) {
-          console.warn(`Model ${model} query failed:`, modelErr.message || modelErr);
+          const errStr = String(modelErr?.message || modelErr);
+          const is503 = errStr.includes('503') || errStr.includes('UNAVAILABLE') || errStr.includes('high demand');
+          if (is503) {
+            console.warn(`Assistant model ${model} temporarily busy (503). Switching to fallback...`);
+          } else {
+            console.warn(`Model ${model} query failed:`, modelErr.message || modelErr);
+          }
         }
       }
     } catch (err: any) {
@@ -661,8 +667,8 @@ export async function transcribeAudioWithGemini(
     };
   }
 
-  // Support models with multimodal audio capabilities
-  const models = ['gemini-3.6-flash', 'gemini-3.5-transcribe', 'gemini-3.8-flash'];
+  // Support models with multimodal audio capabilities, prioritizing specialized audio models
+  const models = ['gemini-3.5-transcribe', 'gemini-3.8-flash', 'gemini-flash-latest'];
   let lastError = '';
 
   for (const model of models) {
@@ -694,7 +700,12 @@ export async function transcribeAudioWithGemini(
       };
     } catch (err: any) {
       lastError = err.message || String(err);
-      console.warn(`Audio transcription model ${model} error:`, lastError);
+      const is503 = lastError.includes('503') || lastError.includes('UNAVAILABLE') || lastError.includes('high demand');
+      if (is503) {
+        console.warn(`Audio transcription model ${model} temporarily busy (503). Trying fallback...`);
+      } else {
+        console.warn(`Audio transcription model ${model} error:`, lastError);
+      }
     }
   }
 
