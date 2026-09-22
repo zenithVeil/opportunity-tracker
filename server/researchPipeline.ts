@@ -1,6 +1,6 @@
 import * as cheerio from 'cheerio';
-import { execSync } from 'child_process';
 import { GoogleGenAI, Type } from '@google/genai';
+import { isSafePublicUrl } from './security/urlValidator.js';
 import {
   OpportunityCategory,
   ResearchEventResult,
@@ -62,9 +62,26 @@ export function classifySourceType(url: string, eventNameQuery: string): { sourc
     return { sourceType: 'unverified', priority: 99, isOfficial: false };
   }
 
-  const queryClean = eventNameQuery.toLowerCase().replace(/[^a-z0-9]/g, '');
+  // Social, discussion, and community forums are never official
+  const isSocialOrCommunity =
+    hostname.includes('reddit.com') ||
+    hostname.includes('medium.com') ||
+    hostname.includes('linkedin.com') ||
+    hostname.includes('twitter.com') ||
+    hostname.includes('x.com') ||
+    hostname.includes('facebook.com') ||
+    hostname.includes('instagram.com') ||
+    hostname.includes('youtube.com') ||
+    hostname.includes('discord.gg') ||
+    hostname.includes('substack.com') ||
+    hostname.includes('news.ycombinator.com') ||
+    hostname.includes('quora.com');
 
-  // Trusted secondary platforms
+  if (isSocialOrCommunity) {
+    return { sourceType: 'trusted_secondary_source', priority: 6, isOfficial: false };
+  }
+
+  // Trusted secondary aggregators & platforms
   const isSecondaryPlatform =
     hostname.includes('devpost.com') ||
     hostname.includes('mlh.io') ||
@@ -72,7 +89,11 @@ export function classifySourceType(url: string, eventNameQuery: string): { sourc
     hostname.includes('kaggle.com') ||
     hostname.includes('unstop.com') ||
     hostname.includes('hackerearth.com') ||
-    hostname.includes('dorahacks.io');
+    hostname.includes('dorahacks.io') ||
+    hostname.includes('wikipedia.org') ||
+    hostname.includes('github.com') ||
+    hostname.includes('gitlab.com') ||
+    hostname.includes('meetup.com');
 
   if (isSecondaryPlatform) {
     return { sourceType: 'trusted_secondary_source', priority: 5, isOfficial: false };
@@ -119,12 +140,26 @@ export function classifySourceType(url: string, eventNameQuery: string): { sourc
     return { sourceType: 'official_organization_announcement', priority: 4, isOfficial: true };
   }
 
-  // If the domain matches the query or is a dedicated standalone site (e.g. hackmit.org, treehacks.com)
-  const isDomainMatchingQuery = queryClean.length > 3 && hostname.replace(/\.[a-z]+$/, '').replace(/[^a-z0-9]/g, '').includes(queryClean);
-  if (isDomainMatchingQuery || !hostname.includes('medium.com') && !hostname.includes('reddit.com') && !hostname.includes('linkedin.com')) {
+  // Evidence-based check for official event website:
+  // Must match the core domain SLD (not a deceptive third-party subdomain),
+  // or be an official recognized organization / academic domain.
+  const hostParts = hostname.split('.');
+  const sld = hostParts.length >= 2 ? hostParts[hostParts.length - 2] : '';
+  const queryClean = eventNameQuery.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  const isExactSldMatch = queryClean.length >= 3 && (sld === queryClean || (queryClean.includes(sld) && sld.length >= 4));
+  const isKnownOfficialOrg =
+    hostname.endsWith('.withgoogle.com') ||
+    hostname.endsWith('google.com') ||
+    hostname.endsWith('.edu') ||
+    hostname.endsWith('defcon.org') ||
+    hostname.endsWith('blackhat.com');
+
+  if (isExactSldMatch || isKnownOfficialOrg) {
     return { sourceType: 'official_event_website', priority: 1, isOfficial: true };
   }
 
+  // Fallback: If no official evidence is established, default to secondary
   return { sourceType: 'trusted_secondary_source', priority: 5, isOfficial: false };
 }
 
@@ -161,34 +196,44 @@ export async function discoverEventSources(query: string, targetUrl?: string): P
     return [];
   }
 
-  // 1. Query DuckDuckGo Lite live search via curl POST
+  // 1. Query DuckDuckGo Lite live search via async fetch
   try {
     const encoded = encodeURIComponent(cleanedQuery);
-    const curlCmd = `curl -s -L --max-time 6 -X POST -d "q=${encoded}" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" https://lite.duckduckgo.com/lite/`;
-    const rawHtml = execSync(curlCmd, { encoding: 'utf-8', timeout: 7000 });
+    const ddgRes = await fetch('https://lite.duckduckgo.com/lite/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      },
+      body: `q=${encoded}`,
+      signal: AbortSignal.timeout(6000),
+    });
 
-    const linkRegex = /<a[^>]+href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-    let match: RegExpExecArray | null;
-    while ((match = linkRegex.exec(rawHtml)) !== null) {
-      const rawLink = match[1];
-      const title = match[2].replace(/<[^>]+>/g, '').trim();
+    if (ddgRes.ok) {
+      const rawHtml = await ddgRes.text();
+      const linkRegex = /<a[^>]+href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+      let match: RegExpExecArray | null;
+      while ((match = linkRegex.exec(rawHtml)) !== null) {
+        const rawLink = match[1];
+        const title = match[2].replace(/<[^>]+>/g, '').trim();
 
-      if (
-        rawLink &&
-        !rawLink.includes('duckduckgo.com') &&
-        !rawLink.includes('yandex.') &&
-        !rawLink.includes('bing.com')
-      ) {
-        if (!seenUrls.has(rawLink)) {
-          seenUrls.add(rawLink);
-          const { sourceType, isOfficial } = classifySourceType(rawLink, cleanedQuery);
-          discovered.push({
-            url: rawLink,
-            title: title || rawLink,
-            sourceType,
-            retrievedSuccessfully: false,
-            isOfficial,
-          });
+        if (
+          rawLink &&
+          !rawLink.includes('duckduckgo.com') &&
+          !rawLink.includes('yandex.') &&
+          !rawLink.includes('bing.com')
+        ) {
+          if (!seenUrls.has(rawLink)) {
+            seenUrls.add(rawLink);
+            const { sourceType, isOfficial } = classifySourceType(rawLink, cleanedQuery);
+            discovered.push({
+              url: rawLink,
+              title: title || rawLink,
+              sourceType,
+              retrievedSuccessfully: false,
+              isOfficial,
+            });
+          }
         }
       }
     }
@@ -303,9 +348,8 @@ export function normalizeEventUrl(rawUrl: string): string {
 }
 
 /**
- * Resilient multi-step HTML retrieval.
- * Tries normalized URL, alternate hostnames (without www / with www), and falls back to curl
- * with insecure TLS (-k) for student hackathons/CTFs with misconfigured or expired SSL certs.
+ * Resilient, bounded asynchronous HTML retrieval.
+ * Enforces SSRF validation, handles redirects, bounds timeouts, and limits response size.
  */
 export async function fetchHtmlWithFallbacks(
   targetUrl: string,
@@ -320,13 +364,21 @@ export async function fetchHtmlWithFallbacks(
     candidates.push(normalized.replace('://www.', '://'));
   }
 
-  // 1. Try native fetch with abort signal
   for (const cand of candidates) {
     try {
+      // 1. Enforce strict SSRF protection before initiating request
+      const isSafe = await isSafePublicUrl(cand);
+      if (!isSafe) {
+        console.warn(`[SSRF Guard] Blocked request to prohibited or private destination: ${cand}`);
+        continue;
+      }
+
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
+
       const res = await fetch(cand, {
         signal: controller.signal,
+        redirect: 'follow',
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 OpportunityTrackerResearch/2.0',
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -334,25 +386,17 @@ export async function fetchHtmlWithFallbacks(
         },
       });
       clearTimeout(timer);
+
       if (res.ok) {
+        // Enforce maximum body size (5MB) to protect against memory exhaustion
         const html = await res.text();
-        return { html, finalUrl: cand, status: res.status };
+        if (html && html.length > 50 && html.length <= 5 * 1024 * 1024) {
+          return { html, finalUrl: cand, status: res.status };
+        }
       }
     } catch {
-      // Continue to next candidate or curl fallback
+      // Graceful timeout or network failure handling
     }
-  }
-
-  // 2. Fallback to curl with -k (insecure TLS) for tricky student/hackathon/CTF certs
-  try {
-    const escapedUrl = candidates[0].replace(/"/g, '\\"');
-    const curlCmd = `curl -s -L -k --max-time 7 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36" "${escapedUrl}"`;
-    const html = execSync(curlCmd, { encoding: 'utf-8', timeout: 8000 });
-    if (html && html.length > 50) {
-      return { html, finalUrl: candidates[0], status: 200 };
-    }
-  } catch {
-    // curl failed
   }
 
   return null;

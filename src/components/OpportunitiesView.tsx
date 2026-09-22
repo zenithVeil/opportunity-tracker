@@ -137,7 +137,9 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
       return true;
     }).sort((a, b) => {
       if (sortBy === 'deadline') {
-        return getDaysRemaining(a.deadline) - getDaysRemaining(b.deadline);
+        const da = getDaysRemaining(a.deadline) ?? Infinity;
+        const db = getDaysRemaining(b.deadline) ?? Infinity;
+        return da - db;
       }
       if (sortBy === 'name') {
         return a.name.localeCompare(b.name);

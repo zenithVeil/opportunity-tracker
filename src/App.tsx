@@ -109,7 +109,7 @@ export default function App() {
   const unreadCount = notifications.filter((n) => !n.read).length;
   const urgentCount = opportunities.filter((o) => {
     const d = getDaysRemaining(o.deadline);
-    return d >= 0 && d <= 3;
+    return d !== null && d >= 0 && d <= 3;
   }).length;
   const pendingTasksCount = opportunities.reduce(
     (sum, o) => sum + o.tasks.filter((t) => !t.completed).length,

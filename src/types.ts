@@ -33,7 +33,7 @@ export type OpportunityCategory =
   | 'grant'
   | 'other';
 
-export type UrgencyLevel = 'comfortable' | 'approaching' | 'urgent' | 'passed';
+export type UrgencyLevel = 'comfortable' | 'approaching' | 'urgent' | 'passed' | 'none';
 
 export interface TaskItem {
   id: string;

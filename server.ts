@@ -6,6 +6,7 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 import { INITIAL_SAMPLE_OPPORTUNITIES, INITIAL_NOTIFICATIONS } from './src/data/defaultOpportunities.js';
+import { JsonFileStorage } from './server/storage.js';
 import {
   Opportunity,
   OpportunityStatus,
@@ -32,6 +33,14 @@ const __dirnameSafe = typeof __dirname !== 'undefined' ? __dirname : (__filename
 
 const app = express();
 const PORT = 3000;
+
+// Security and sanity headers
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -77,27 +86,6 @@ const INITIAL_VOICE_NOTES: VoiceNote[] = [
   },
 ];
 
-function loadVoiceNotes(): VoiceNote[] {
-  try {
-    if (fs.existsSync(VOICE_NOTES_FILE)) {
-      const raw = fs.readFileSync(VOICE_NOTES_FILE, 'utf-8');
-      return JSON.parse(raw);
-    }
-  } catch (err) {
-    console.error('Error reading voice notes file:', err);
-  }
-  saveVoiceNotes(INITIAL_VOICE_NOTES);
-  return INITIAL_VOICE_NOTES;
-}
-
-function saveVoiceNotes(items: VoiceNote[]): void {
-  try {
-    fs.writeFileSync(VOICE_NOTES_FILE, JSON.stringify(items, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Error saving voice notes file:', err);
-  }
-}
-
 const DEFAULT_SETTINGS: NotificationSettings = {
   reminder14d: true,
   reminder7d: true,
@@ -109,68 +97,81 @@ const DEFAULT_SETTINGS: NotificationSettings = {
   notifyOnOverdueTasks: true,
 };
 
-// Storage helpers
+// Resilient atomic storage handlers (never overwrite corrupted files with samples)
+const opportunitiesStorage = new JsonFileStorage<Opportunity[]>(
+  OPPORTUNITIES_FILE,
+  INITIAL_SAMPLE_OPPORTUNITIES
+);
+
+const notificationsStorage = new JsonFileStorage<AppNotification[]>(
+  NOTIFICATIONS_FILE,
+  INITIAL_NOTIFICATIONS
+);
+
+const settingsStorage = new JsonFileStorage<NotificationSettings>(
+  SETTINGS_FILE,
+  DEFAULT_SETTINGS
+);
+
+const voiceNotesStorage = new JsonFileStorage<VoiceNote[]>(
+  VOICE_NOTES_FILE,
+  INITIAL_VOICE_NOTES
+);
+
 function loadOpportunities(): Opportunity[] {
-  try {
-    if (fs.existsSync(OPPORTUNITIES_FILE)) {
-      const raw = fs.readFileSync(OPPORTUNITIES_FILE, 'utf-8');
-      return JSON.parse(raw);
-    }
-  } catch (err) {
-    console.error('Error reading opportunities file, falling back to sample:', err);
-  }
-  // Initialize with sample data
-  saveOpportunities(INITIAL_SAMPLE_OPPORTUNITIES);
-  return INITIAL_SAMPLE_OPPORTUNITIES;
+  return opportunitiesStorage.load();
 }
 
 function saveOpportunities(items: Opportunity[]): void {
-  try {
-    fs.writeFileSync(OPPORTUNITIES_FILE, JSON.stringify(items, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Error saving opportunities file:', err);
-  }
+  opportunitiesStorage.save(items);
 }
 
 function loadNotifications(): AppNotification[] {
-  try {
-    if (fs.existsSync(NOTIFICATIONS_FILE)) {
-      const raw = fs.readFileSync(NOTIFICATIONS_FILE, 'utf-8');
-      return JSON.parse(raw);
-    }
-  } catch (err) {
-    console.error('Error reading notifications file:', err);
-  }
-  saveNotifications(INITIAL_NOTIFICATIONS);
-  return INITIAL_NOTIFICATIONS;
+  return notificationsStorage.load();
 }
 
 function saveNotifications(items: AppNotification[]): void {
-  try {
-    fs.writeFileSync(NOTIFICATIONS_FILE, JSON.stringify(items, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Error saving notifications file:', err);
-  }
+  notificationsStorage.save(items);
 }
 
 function loadSettings(): NotificationSettings {
-  try {
-    if (fs.existsSync(SETTINGS_FILE)) {
-      const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
-      return JSON.parse(raw);
-    }
-  } catch (err) {
-    console.error('Error reading settings file:', err);
-  }
-  return DEFAULT_SETTINGS;
+  return settingsStorage.load();
 }
 
 function saveSettings(settings: NotificationSettings): void {
-  try {
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Error saving settings file:', err);
+  settingsStorage.save(settings);
+}
+
+function loadVoiceNotes(): VoiceNote[] {
+  return voiceNotesStorage.load();
+}
+
+function saveVoiceNotes(items: VoiceNote[]): void {
+  voiceNotesStorage.save(items);
+}
+
+// Resilient model caller with automatic fallbacks for 503/high-demand spikes
+async function generateWithFallbacks(
+  ai: GoogleGenAI,
+  options: {
+    contents: any;
+    config?: any;
+  },
+  models = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite']
+): Promise<any> {
+  let lastError: any = null;
+  for (const model of models) {
+    try {
+      return await ai.models.generateContent({
+        ...options,
+        model,
+      });
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`[AI Fallback] Model ${model} attempt failed: ${err?.message || err}. Trying next fallback...`);
+    }
   }
+  throw lastError;
 }
 
 // Lazy Gemini client helper
@@ -259,8 +260,18 @@ app.get('/api/opportunities', (req, res) => {
 app.post('/api/opportunities', (req, res) => {
   try {
     const body = req.body;
-    if (!body.name || !body.deadline) {
-      res.status(400).json({ error: 'Name and deadline are required.' });
+    if (!body || typeof body !== 'object') {
+      res.status(400).json({ error: 'Request body must be a valid JSON object.' });
+      return;
+    }
+
+    if (!body.name || typeof body.name !== 'string' || !body.name.trim()) {
+      res.status(400).json({ error: 'Name is required and must be a non-empty string.' });
+      return;
+    }
+
+    if (body.name.trim().length > 250) {
+      res.status(400).json({ error: 'Name must not exceed 250 characters.' });
       return;
     }
 
@@ -268,17 +279,17 @@ app.post('/api/opportunities', (req, res) => {
     const newOpportunity: Opportunity = {
       id: `opp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       name: body.name.trim(),
-      websiteUrl: body.websiteUrl?.trim() || '',
-      registrationUrl: body.registrationUrl?.trim() || '',
+      websiteUrl: typeof body.websiteUrl === 'string' ? body.websiteUrl.trim().slice(0, 500) : '',
+      registrationUrl: typeof body.registrationUrl === 'string' ? body.registrationUrl.trim().slice(0, 500) : '',
       category: body.category || 'hackathon',
-      organization: body.organization?.trim() || 'Independent',
-      deadline: body.deadline,
-      eventDate: body.eventDate || '',
+      organization: typeof body.organization === 'string' ? body.organization.trim().slice(0, 200) : 'Independent',
+      deadline: typeof body.deadline === 'string' ? body.deadline.trim().slice(0, 50) : '',
+      eventDate: typeof body.eventDate === 'string' ? body.eventDate.trim().slice(0, 50) : '',
       status: body.status || 'Interested',
-      notes: body.notes || '',
+      notes: typeof body.notes === 'string' ? body.notes.slice(0, 10000) : '',
       tasks: Array.isArray(body.tasks) ? body.tasks : [],
-      tags: Array.isArray(body.tags) ? body.tags : [],
-      reminderDaysBefore: body.reminderDaysBefore || [14, 7, 3, 1, 0],
+      tags: Array.isArray(body.tags) ? body.tags.map((t: any) => String(t).slice(0, 50)) : [],
+      reminderDaysBefore: Array.isArray(body.reminderDaysBefore) ? body.reminderDaysBefore : [14, 7, 3, 1, 0],
       provenance: body.provenance || { origin: 'manual', verifiedByCheck: false },
       tracking: {
         lastChecked: null,
@@ -465,8 +476,7 @@ Extract with high precision:
 4. Any critical announcements (e.g., date changes, extensions, format changes). List up to 2 items.
 5. 1-sentence brief summary of the status on the page.`;
 
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
+        const response = await generateWithFallbacks(ai, {
           contents: prompt,
           config: {
             responseMimeType: 'application/json',
@@ -1192,8 +1202,7 @@ app.post('/api/voice-notes', async (req, res) => {
     const ai = getGeminiClient();
     if (ai) {
       try {
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
+        const response = await generateWithFallbacks(ai, {
           contents: `Summarize this spoken voice note in 1 punchy sentence. Text: "${transcription}"`,
         });
         newNote.summary = response.text?.trim();
@@ -1293,8 +1302,7 @@ Return a STRICT JSON object conforming to this schema:
   "confidence": "high" | "medium" | "low"
 }`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+    const response = await generateWithFallbacks(ai, {
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -1401,8 +1409,7 @@ Return a STRICT JSON object:
   }
 }`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+    const response = await generateWithFallbacks(ai, {
       contents: prompt,
       config: {
         responseMimeType: 'application/json',

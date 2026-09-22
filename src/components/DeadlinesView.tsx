@@ -36,19 +36,23 @@ export const DeadlinesView: React.FC<DeadlinesViewProps> = ({
   // Categorize by urgency
   const urgentList = opportunities
     .filter((o) => getUrgencyLevel(o.deadline) === 'urgent')
-    .sort((a, b) => getDaysRemaining(a.deadline) - getDaysRemaining(b.deadline));
+    .sort((a, b) => (getDaysRemaining(a.deadline) ?? Infinity) - (getDaysRemaining(b.deadline) ?? Infinity));
 
   const approachingList = opportunities
     .filter((o) => getUrgencyLevel(o.deadline) === 'approaching')
-    .sort((a, b) => getDaysRemaining(a.deadline) - getDaysRemaining(b.deadline));
+    .sort((a, b) => (getDaysRemaining(a.deadline) ?? Infinity) - (getDaysRemaining(b.deadline) ?? Infinity));
 
   const comfortableList = opportunities
     .filter((o) => getUrgencyLevel(o.deadline) === 'comfortable')
-    .sort((a, b) => getDaysRemaining(a.deadline) - getDaysRemaining(b.deadline));
+    .sort((a, b) => (getDaysRemaining(a.deadline) ?? Infinity) - (getDaysRemaining(b.deadline) ?? Infinity));
 
   const passedList = opportunities
     .filter((o) => getUrgencyLevel(o.deadline) === 'passed')
-    .sort((a, b) => getDaysRemaining(b.deadline) - getDaysRemaining(a.deadline));
+    .sort((a, b) => (getDaysRemaining(b.deadline) ?? -Infinity) - (getDaysRemaining(a.deadline) ?? -Infinity));
+
+  const unscheduledList = opportunities
+    .filter((o) => getUrgencyLevel(o.deadline) === 'none')
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   const filteredList =
     selectedUrgencyTab === 'urgent'
@@ -59,7 +63,7 @@ export const DeadlinesView: React.FC<DeadlinesViewProps> = ({
       ? comfortableList
       : selectedUrgencyTab === 'passed'
       ? passedList
-      : [...urgentList, ...approachingList, ...comfortableList, ...passedList];
+      : [...urgentList, ...approachingList, ...comfortableList, ...unscheduledList, ...passedList];
 
   return (
     <div id="deadlines-view" className="space-y-6">
@@ -283,7 +287,7 @@ export const DeadlinesView: React.FC<DeadlinesViewProps> = ({
                       {countdown}
                     </div>
                     <div className="text-[11px] text-slate-400 mt-0.5">
-                      {daysRemaining >= 0 ? `${daysRemaining} calendar days` : 'Closed'}
+                      {daysRemaining !== null ? (daysRemaining >= 0 ? `${daysRemaining} calendar days` : 'Closed') : 'Unscheduled'}
                     </div>
                   </div>
 

@@ -65,16 +65,20 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   const urgentOpportunities = opportunities.filter((o) => {
     const days = getDaysRemaining(o.deadline);
-    return days >= 0 && days <= 3;
+    return days !== null && days >= 0 && days <= 3;
   });
 
   const upcomingDeadlines = [...opportunities]
-    .filter((o) => getDaysRemaining(o.deadline) >= 0)
-    .sort((a, b) => getDaysRemaining(a.deadline) - getDaysRemaining(b.deadline));
+    .filter((o) => {
+      const days = getDaysRemaining(o.deadline);
+      return days !== null && days >= 0;
+    })
+    .sort((a, b) => (getDaysRemaining(a.deadline) ?? Infinity) - (getDaysRemaining(b.deadline) ?? Infinity));
 
-  const upcomingDeadlines14d = upcomingDeadlines.filter(
-    (o) => getDaysRemaining(o.deadline) <= 14
-  );
+  const upcomingDeadlines14d = upcomingDeadlines.filter((o) => {
+    const days = getDaysRemaining(o.deadline);
+    return days !== null && days <= 14;
+  });
 
   const pendingTasksTotal = opportunities.reduce((acc, opp) => {
     return acc + opp.tasks.filter((t) => !t.completed).length;
@@ -322,7 +326,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="md:hidden flex flex-col gap-2">
             {displayedList.map((opp) => {
               const days = getDaysRemaining(opp.deadline);
-              const alertColor = days <= 3 ? '🔴' : days <= 10 ? '🟠' : '🟢';
+              const alertColor = days === null ? '⚪' : days <= 3 ? '🔴' : days <= 10 ? '🟠' : '🟢';
               const formattedDate = formatShortMonthDay(opp.deadline);
 
               return (

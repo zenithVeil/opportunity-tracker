@@ -25,7 +25,7 @@ export interface DailyPriorityItem {
  * 2. Registration / Participation status (Registered/Applied carry higher urgency for deliverables)
  * 3. High-priority incomplete tasks
  */
-export function computeDailyPriorities(opportunities: Opportunity[], refDate = new Date('2026-09-12')): DailyPriorityItem[] {
+export function computeDailyPriorities(opportunities: Opportunity[], refDate: Date = new Date()): DailyPriorityItem[] {
   const refMs = refDate.getTime();
   const scored: DailyPriorityItem[] = [];
 
@@ -34,17 +34,27 @@ export function computeDailyPriorities(opportunities: Opportunity[], refDate = n
       continue;
     }
 
-    const deadlineDate = new Date(opp.deadline);
-    const diffDays = Math.ceil((deadlineDate.getTime() - refMs) / (1000 * 60 * 60 * 24));
+    let diffDays: number | null = null;
+    let deadlineText = 'No deadline';
+    if (opp.deadline && opp.deadline.trim()) {
+      const deadlineDate = new Date(opp.deadline);
+      if (!isNaN(deadlineDate.getTime())) {
+        diffDays = Math.ceil((deadlineDate.getTime() - refMs) / (1000 * 60 * 60 * 24));
+        deadlineText = opp.deadline.slice(0, 10);
+      }
+    }
     
     // Skip if deadline was more than 3 days ago
-    if (diffDays < -3) continue;
+    if (diffDays !== null && diffDays < -3) continue;
 
     let score = 0;
     let reasonParts: string[] = [];
 
-    // 1. Deadline urgency
-    if (diffDays <= 0) {
+    // 1. Deadline urgency (only when a valid deadline exists)
+    if (diffDays === null) {
+      score += 10;
+      reasonParts.push('No deadline scheduled');
+    } else if (diffDays <= 0) {
       score += 120;
       reasonParts.push('Deadline is today or already due');
     } else if (diffDays <= 2) {
@@ -88,8 +98,8 @@ export function computeDailyPriorities(opportunities: Opportunity[], refDate = n
     scored.push({
       opportunityId: opp.id,
       opportunityName: opp.name,
-      deadlineText: opp.deadline.slice(0, 10),
-      daysRemaining: diffDays,
+      deadlineText,
+      daysRemaining: diffDays ?? 999,
       status: opp.status,
       urgencyScore: score,
       priorityTasks: highPriTasks.length > 0 ? highPriTasks.map(t => t.name) : pendingTasks.slice(0, 2).map(t => t.name),
@@ -102,16 +112,45 @@ export function computeDailyPriorities(opportunities: Opportunity[], refDate = n
 
 /**
  * Natural language affirmation detection.
+ * Enforces strict unambiguity: rejects questions, hesitations, and contrastive conjunctions.
  */
 export function isAffirmation(text: string): boolean {
-  const clean = text.toLowerCase().trim().replace(/[.,!?:;]+$/, '');
+  if (!text || typeof text !== 'string') return false;
+  const raw = text.trim();
+
+  // Any question mark indicates a clarifying question or doubt, NOT an affirmation
+  if (raw.includes('?')) return false;
+
+  const clean = raw.toLowerCase().replace(/[.,!;:()]+$/, '').trim();
+
+  // Hesitation or contrastive clauses indicate lack of unambiguous consent
+  const hesitationPatterns = [
+    /\b(but|wait|hold on|not yet|dont|don't|cancel|stop|nevermind|except|later|maybe|if|unless)\b/i,
+    /\b(tell me|what is|how do|what are|why|explain)\b/i
+  ];
+  for (const pattern of hesitationPatterns) {
+    if (pattern.test(clean)) {
+      return false;
+    }
+  }
+
   const exactAffirmations = [
     'ok', 'okay', 'yes', 'yep', 'yeah', 'yea', 'sure', 'do it', 'save it', 'save', 'confirm',
     'go ahead', 'proceed', 'sounds good', 'do that', 'make it so', 'apply', 'please do',
-    'yes please', 'yes do it', 'save note', 'create it', 'add it', 'right', 'correct'
+    'yes please', 'yes do it', 'save note', 'create it', 'add it', 'right', 'correct',
+    'looks good', 'approved', 'yes confirm', 'confirm save'
   ];
   if (exactAffirmations.includes(clean)) return true;
-  if (/^(yes|ok|okay|sure|save|confirm|do it|proceed)\b/i.test(clean)) return true;
+
+  // Only match leading affirmation if remainder contains purely affirmative words (e.g. "yes please", "sure go ahead")
+  const leadingAffirmation = /^(yes|ok|okay|sure|save|confirm|proceed)\b/i;
+  if (leadingAffirmation.test(clean)) {
+    const remainder = clean.replace(leadingAffirmation, '').trim();
+    if (!remainder) return true;
+    const allowedFollowers = ['please', 'do it', 'go ahead', 'thanks', 'thank you', 'save it', 'add it'];
+    return allowedFollowers.some(f => remainder === f || remainder === `please ${f}`);
+  }
+
   return false;
 }
 

@@ -2,20 +2,35 @@ import { UrgencyLevel, OpportunityStatus, OpportunityCategory } from '../types';
 
 /**
  * Parses any date string safely into a Date object.
+ * Correctly avoids UTC timezone shifting for YYYY-MM-DD date-only strings.
  */
-export function parseDate(dateStr: string): Date | null {
-  if (!dateStr) return null;
-  const d = new Date(dateStr);
+export function parseDate(dateStr: string | null | undefined): Date | null {
+  if (!dateStr || typeof dateStr !== 'string') return null;
+  const trimmed = dateStr.trim();
+  if (!trimmed) return null;
+
+  // Handle YYYY-MM-DD date-only strings in local timezone context to prevent off-by-one errors
+  const ymdMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (ymdMatch) {
+    const year = parseInt(ymdMatch[1], 10);
+    const month = parseInt(ymdMatch[2], 10) - 1;
+    const day = parseInt(ymdMatch[3], 10);
+    const d = new Date(year, month, day);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  const d = new Date(trimmed);
   return isNaN(d.getTime()) ? null : d;
 }
 
 /**
  * Calculates days remaining until a deadline.
+ * Returns null if the deadline string is empty, missing, or invalid.
  * Negative indicates deadline has passed.
  */
-export function getDaysRemaining(deadlineStr: string, referenceDate: Date = new Date()): number {
+export function getDaysRemaining(deadlineStr: string | null | undefined, referenceDate: Date = new Date()): number | null {
   const deadline = parseDate(deadlineStr);
-  if (!deadline) return 0;
+  if (!deadline) return null;
 
   // Compare on midnight boundaries for day-level precision
   const ref = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), referenceDate.getDate());
@@ -28,8 +43,9 @@ export function getDaysRemaining(deadlineStr: string, referenceDate: Date = new 
 /**
  * Determine urgency level based on days remaining.
  */
-export function getUrgencyLevel(deadlineStr: string, referenceDate: Date = new Date()): UrgencyLevel {
+export function getUrgencyLevel(deadlineStr: string | null | undefined, referenceDate: Date = new Date()): UrgencyLevel {
   const days = getDaysRemaining(deadlineStr, referenceDate);
+  if (days === null) return 'none';
   if (days < 0) return 'passed';
   if (days <= 3) return 'urgent';
   if (days <= 10) return 'approaching';
@@ -39,8 +55,11 @@ export function getUrgencyLevel(deadlineStr: string, referenceDate: Date = new D
 /**
  * Generates a human-friendly countdown or status string.
  */
-export function formatCountdown(deadlineStr: string, referenceDate: Date = new Date()): string {
+export function formatCountdown(deadlineStr: string | null | undefined, referenceDate: Date = new Date()): string {
   const days = getDaysRemaining(deadlineStr, referenceDate);
+  if (days === null) {
+    return 'No deadline set';
+  }
   
   if (days < 0) {
     const passedDays = Math.abs(days);
@@ -58,10 +77,10 @@ export function formatCountdown(deadlineStr: string, referenceDate: Date = new D
 /**
  * Formats a date string into readable format like "Sep 14, 2026".
  */
-export function formatDate(dateStr: string | undefined): string {
-  if (!dateStr) return 'No date set';
+export function formatDate(dateStr: string | null | undefined): string {
+  if (!dateStr || !dateStr.trim()) return 'No date set';
   const d = parseDate(dateStr);
-  if (!d) return dateStr;
+  if (!d) return 'TBD';
   return d.toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
@@ -72,10 +91,10 @@ export function formatDate(dateStr: string | undefined): string {
 /**
  * Formats a date string into compact format like "Sep 20".
  */
-export function formatShortMonthDay(dateStr: string | undefined): string {
-  if (!dateStr) return 'No date';
+export function formatShortMonthDay(dateStr: string | null | undefined): string {
+  if (!dateStr || !dateStr.trim()) return 'No date';
   const d = parseDate(dateStr);
-  if (!d) return dateStr;
+  if (!d) return 'TBD';
   return d.toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
@@ -136,6 +155,12 @@ export function getUrgencyBadgeConfig(urgency: UrgencyLevel): {
         label: 'Deadline Passed',
         badgeClass: 'bg-slate-800/60 text-slate-400 border border-slate-700/40',
         dotClass: 'bg-slate-500',
+      };
+    case 'none':
+      return {
+        label: 'No Deadline',
+        badgeClass: 'bg-zinc-800/60 text-zinc-400 border border-zinc-700/40',
+        dotClass: 'bg-zinc-500',
       };
   }
 }
