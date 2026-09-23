@@ -51,6 +51,28 @@ export interface ChangeLogEntry {
   oldVal: string;
   newVal: string;
   description: string;
+  sourceUrl?: string;
+  sourceLabel?: string;
+}
+
+export interface SourceSnapshot {
+  checkedAt: string;
+  title?: string;
+  textSnippet?: string;
+  detectedDeadline?: string;
+  contentHash?: string;
+}
+
+export interface PerSourceTracking {
+  url: string;
+  sourceLabel?: string;
+  contentHash?: string;
+  lastChecked?: string | null;
+  status?: 'not_checked' | 'active' | 'changed' | 'error';
+  statusCode?: number;
+  errorMessage?: string;
+  previousSnapshot?: SourceSnapshot;
+  changeLog?: ChangeLogEntry[];
 }
 
 export interface TrackingInfo {
@@ -58,9 +80,12 @@ export interface TrackingInfo {
   status: 'not_checked' | 'checking' | 'active' | 'changed' | 'error' | 'healthy';
   statusCode?: number;
   errorMessage?: string;
-  contentHash?: string;
+  contentHash?: string; // Overall / primary hash for backward compatibility
   changeSummary?: string;
   lastChangeDetectedAt?: string;
+  conflictWarning?: string; // Explicit flag if sources disagree (e.g. conflicting deadlines)
+  sources?: Record<string, PerSourceTracking>; // Per-source tracking keyed by URL
+  perSourceTracking?: Record<string, PerSourceTracking>; // Alias for per-source tracking map
   verifiedInfo?: {
     title?: string;
     detectedDeadline?: string;
@@ -68,6 +93,7 @@ export interface TrackingInfo {
     detectedStatus?: string;
     announcements?: string[];
     summary?: string;
+    keyFactsSources?: Record<string, string>; // Maps fact name -> source URL where it was detected
   };
   previousSnapshot?: {
     checkedAt: string;
@@ -196,6 +222,7 @@ export interface Opportunity {
   id: string;
   name: string;
   websiteUrl: string;
+  additionalSources?: string[]; // Additional sources to monitor (e.g. registration platform, Twitter, etc.), max 500 chars each
   registrationUrl?: string;
   category: OpportunityCategory;
   organization: string;

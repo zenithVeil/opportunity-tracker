@@ -276,10 +276,19 @@ app.post('/api/opportunities', (req, res) => {
     }
 
     const items = loadOpportunities();
+    let additionalSources: string[] = [];
+    if (Array.isArray(body.additionalSources)) {
+      additionalSources = body.additionalSources
+        .filter((s: any) => typeof s === 'string' && s.trim().length > 0)
+        .map((s: string) => s.trim().slice(0, 500))
+        .slice(0, 5);
+    }
+
     const newOpportunity: Opportunity = {
       id: `opp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       name: body.name.trim(),
       websiteUrl: typeof body.websiteUrl === 'string' ? body.websiteUrl.trim().slice(0, 500) : '',
+      additionalSources,
       registrationUrl: typeof body.registrationUrl === 'string' ? body.registrationUrl.trim().slice(0, 500) : '',
       category: body.category || 'hackathon',
       organization: typeof body.organization === 'string' ? body.organization.trim().slice(0, 200) : 'Independent',
@@ -296,6 +305,7 @@ app.post('/api/opportunities', (req, res) => {
         status: 'not_checked',
         failedAttemptsCount: 0,
         changeLog: [],
+        sources: {},
       },
       isSample: false,
       createdAt: new Date().toISOString(),
@@ -323,9 +333,18 @@ app.put('/api/opportunities/:id', (req, res) => {
     }
 
     const existing = items[index];
+    let additionalSources = existing.additionalSources || [];
+    if (Array.isArray(req.body.additionalSources)) {
+      additionalSources = req.body.additionalSources
+        .filter((s: any) => typeof s === 'string' && s.trim().length > 0)
+        .map((s: string) => s.trim().slice(0, 500))
+        .slice(0, 5);
+    }
+
     const updated: Opportunity = {
       ...existing,
       ...req.body,
+      additionalSources,
       id: existing.id, // ID cannot change
       updatedAt: new Date().toISOString(),
     };

@@ -6,3 +6,11 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# User personal data and runtime storage
+data/*.json
+data/*.corrupt*
+data/*.db*
+data/*.sqlite*
+*.sqlite
+*.db
