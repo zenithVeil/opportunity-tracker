@@ -22,6 +22,7 @@ import {
   FileText,
   Brain,
   ShieldCheck,
+  Link2,
 } from 'lucide-react';
 import { GroundedResearchCard } from './GroundedResearchCard';
 import { FieldVerificationBadge } from './FieldVerificationBadge';
@@ -73,6 +74,7 @@ export const AddOpportunityModal: React.FC<AddOpportunityModalProps> = ({
   // Form fields
   const [name, setName] = useState('');
   const [websiteUrl, setWebsiteUrl] = useState(initialUrl || '');
+  const [additionalSources, setAdditionalSources] = useState<string[]>([]);
 
   React.useEffect(() => {
     if (initialUrl) {
@@ -121,6 +123,9 @@ export const AddOpportunityModal: React.FC<AddOpportunityModalProps> = ({
       if (ext.deadline) setDeadline(ext.deadline);
       if (ext.eventStartDate) setEventStartDate(ext.eventStartDate);
       if (ext.summary) setNotes(ext.summary);
+      if (Array.isArray(ext.additionalSources) && ext.additionalSources.length > 0) {
+        setAdditionalSources(ext.additionalSources.slice(0, 5));
+      }
       if (ext.tags && ext.tags.length > 0) {
         setTagsInput(ext.tags.join(', '));
       }
@@ -225,6 +230,7 @@ export const AddOpportunityModal: React.FC<AddOpportunityModalProps> = ({
       const newOpp = await api.createOpportunity({
         name: name.trim(),
         websiteUrl: websiteUrl.trim(),
+        additionalSources: additionalSources.map((s) => s.trim()).filter(Boolean).slice(0, 5),
         registrationUrl: registrationUrl.trim(),
         category,
         organization: organization.trim() || 'Independent',
@@ -435,6 +441,68 @@ export const AddOpportunityModal: React.FC<AddOpportunityModalProps> = ({
                 className="w-full rounded-lg border border-[#1e293b] bg-[#121826] px-3 py-2 text-xs text-white focus:border-cyan-500/50 focus:outline-none"
               />
             </div>
+          </div>
+
+          {/* Multi-source Monitoring URLs */}
+          <div className="rounded-xl border border-[#1e293b] bg-[#101524] p-3.5 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                  <Globe className="h-3.5 w-3.5 text-cyan-400" />
+                  <span>Additional Monitored Sources ({additionalSources.length}/5)</span>
+                </label>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  Secondary pages to track for updates & announcements (e.g. Devpost, CTFtime, Twitter/X, Luma).
+                </p>
+              </div>
+
+              {additionalSources.length < 5 && (
+                <button
+                  type="button"
+                  onClick={() => setAdditionalSources((prev) => [...prev, ''])}
+                  className="flex items-center gap-1 rounded-lg border border-cyan-500/30 bg-cyan-950/40 px-2.5 py-1 text-xs font-medium text-cyan-300 hover:bg-cyan-900/40 hover:border-cyan-400 transition-colors"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>+ Add Source</span>
+                </button>
+              )}
+            </div>
+
+            {additionalSources.length > 0 && (
+              <div className="space-y-2 pt-1">
+                {additionalSources.map((src, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <Link2 className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
+                      <input
+                        type="url"
+                        placeholder="https://..."
+                        value={src}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setAdditionalSources((prev) => {
+                            const updated = [...prev];
+                            updated[idx] = val;
+                            return updated;
+                          });
+                        }}
+                        className="w-full rounded-lg border border-[#1e293b] bg-[#121826] pl-8 pr-3 py-1.5 text-xs text-white focus:border-cyan-500/50 focus:outline-none"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAdditionalSources((prev) => prev.filter((_, i) => i !== idx))
+                      }
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-950/30 transition-colors shrink-0"
+                      title="Remove source"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Category & Status */}

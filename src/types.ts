@@ -302,7 +302,9 @@ export interface ExtractedOpportunityData {
   deadline: string;
   eventDate?: string;
   eventStartDate?: string;
+  websiteUrl?: string;
   registrationUrl?: string;
+  additionalSources?: string[];
   suggestedTags?: string[];
   tags?: string[];
   suggestedTasks?: Array<{

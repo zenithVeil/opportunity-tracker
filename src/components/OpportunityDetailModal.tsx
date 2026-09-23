@@ -34,6 +34,9 @@ import {
   Save,
   Check,
   Search,
+  Link2,
+  AlertCircle,
+  Layers,
 } from 'lucide-react';
 import { FieldVerificationBadge } from './FieldVerificationBadge';
 
@@ -91,6 +94,9 @@ export const OpportunityDetailModal: React.FC<OpportunityDetailModalProps> = ({
   const [category, setCategory] = useState<OpportunityCategory>(opportunity.category);
   const [websiteUrl, setWebsiteUrl] = useState(opportunity.websiteUrl || '');
   const [registrationUrl, setRegistrationUrl] = useState(opportunity.registrationUrl || '');
+  const [additionalSources, setAdditionalSources] = useState<string[]>(
+    opportunity.additionalSources || []
+  );
   const [deadline, setDeadline] = useState(opportunity.deadline);
   const [eventStartDate, setEventStartDate] = useState(opportunity.eventStartDate || '');
   const [notes, setNotes] = useState(opportunity.notes || '');
@@ -99,6 +105,23 @@ export const OpportunityDetailModal: React.FC<OpportunityDetailModalProps> = ({
   const [tagInput, setTagInput] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+
+  React.useEffect(() => {
+    if (opportunity) {
+      setStatus(opportunity.status);
+      setName(opportunity.name);
+      setOrganization(opportunity.organization);
+      setCategory(opportunity.category);
+      setWebsiteUrl(opportunity.websiteUrl || '');
+      setRegistrationUrl(opportunity.registrationUrl || '');
+      setAdditionalSources(opportunity.additionalSources || []);
+      setDeadline(opportunity.deadline);
+      setEventStartDate(opportunity.eventStartDate || '');
+      setNotes(opportunity.notes || '');
+      setTasks(opportunity.tasks || []);
+      setTags(opportunity.tags || []);
+    }
+  }, [opportunity]);
 
   // New task input state
   const [newTaskName, setNewTaskName] = useState('');
@@ -165,6 +188,7 @@ export const OpportunityDetailModal: React.FC<OpportunityDetailModalProps> = ({
         category,
         status,
         websiteUrl: websiteUrl.trim(),
+        additionalSources: additionalSources.map((s) => s.trim()).filter(Boolean).slice(0, 5),
         registrationUrl: registrationUrl.trim(),
         deadline: deadline ? new Date(deadline).toISOString() : opportunity.deadline,
         eventStartDate: eventStartDate ? new Date(eventStartDate).toISOString() : undefined,
@@ -188,6 +212,34 @@ export const OpportunityDetailModal: React.FC<OpportunityDetailModalProps> = ({
       onClose();
     }
   };
+
+  // Compile all monitored sources for multi-source tracking view
+  const allSourcesList: Array<{ url: string; label: string; isPrimary: boolean }> = [];
+  if (opportunity.websiteUrl) {
+    allSourcesList.push({
+      url: opportunity.websiteUrl,
+      label: 'Official Website',
+      isPrimary: true,
+    });
+  }
+  if (Array.isArray(opportunity.additionalSources)) {
+    for (const s of opportunity.additionalSources) {
+      if (s && !allSourcesList.some((item) => item.url.toLowerCase() === s.toLowerCase())) {
+        let label = 'Secondary Source';
+        try {
+          const u = new URL(s.startsWith('http') ? s : `https://${s}`);
+          label = u.hostname.replace(/^www\./, '');
+        } catch {
+          // ignore
+        }
+        allSourcesList.push({
+          url: s,
+          label,
+          isPrimary: false,
+        });
+      }
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm overflow-y-auto">
@@ -446,6 +498,84 @@ export const OpportunityDetailModal: React.FC<OpportunityDetailModalProps> = ({
                 </div>
               </div>
 
+              {/* Additional Monitored Sources (Up to 5) */}
+              <div className="rounded-xl border border-[#1e293b] bg-[#101524] p-3.5 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                      <Layers className="h-3.5 w-3.5 text-cyan-400" />
+                      <span>Additional Monitored Sources ({additionalSources.length}/5)</span>
+                    </label>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      Secondary pages to track for updates & announcements (e.g. Devpost, CTFtime, Twitter/X, Luma).
+                    </p>
+                  </div>
+
+                  {additionalSources.length < 5 && (
+                    <button
+                      type="button"
+                      onClick={() => setAdditionalSources((prev) => [...prev, ''])}
+                      className="flex items-center gap-1 rounded-lg border border-cyan-500/30 bg-cyan-950/40 px-2.5 py-1 text-xs font-medium text-cyan-300 hover:bg-cyan-900/40 hover:border-cyan-400 transition-colors"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      <span>+ Add Source</span>
+                    </button>
+                  )}
+                </div>
+
+                {additionalSources.length > 0 && (
+                  <div className="space-y-2 pt-1">
+                    {additionalSources.map((src, idx) => (
+                      <div key={idx} className="flex items-center gap-2">
+                        <div className="relative flex-1">
+                          <Link2 className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
+                          <input
+                            type="url"
+                            placeholder="https://..."
+                            value={src}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setAdditionalSources((prev) => {
+                                const updated = [...prev];
+                                updated[idx] = val;
+                                return updated;
+                              });
+                            }}
+                            className="w-full rounded-lg border border-[#1e293b] bg-[#121826] pl-8 pr-3 py-1.5 text-xs text-white focus:border-cyan-500/50 focus:outline-none"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAdditionalSources((prev) => prev.filter((_, i) => i !== idx))
+                          }
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-950/30 transition-colors shrink-0"
+                          title="Remove source"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Gemini Multi-Source Conflict Warning Banner */}
+              {opportunity.tracking.conflictWarning && (
+                <div className="rounded-xl border border-amber-500/50 bg-amber-950/30 p-3.5 text-xs text-amber-200 space-y-1.5">
+                  <div className="font-semibold flex items-center gap-1.5 text-amber-300">
+                    <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
+                    <span>⚠️ Source Discrepancy Flagged across Monitored Pages</span>
+                  </div>
+                  <p className="text-[11px] text-amber-100/90 leading-relaxed font-medium">
+                    {opportunity.tracking.conflictWarning}
+                  </p>
+                  <p className="text-[10px] text-amber-400/80">
+                    Different official or secondary sources report conflicting dates or status. Please double-check manually before taking action.
+                  </p>
+                </div>
+              )}
+
               {/* Source Disagreement / Conflict Warning */}
               {opportunity.verifiedFields?.deadline?.conflicts &&
                 opportunity.verifiedFields.deadline.conflicts.length > 0 && (
@@ -696,31 +826,49 @@ export const OpportunityDetailModal: React.FC<OpportunityDetailModalProps> = ({
             </div>
           )}
 
-          {/* TAB 3: WEBSITE MONITORING */}
+          {/* TAB 3: MULTI-SOURCE WEBSITE MONITORING */}
           {activeTab === 'tracking' && (
             <div className="space-y-4">
+              {/* Conflict Warning Banner if sources disagreed */}
+              {opportunity.tracking.conflictWarning && (
+                <div className="rounded-xl border border-amber-500/60 bg-amber-950/40 p-4 space-y-2 shadow-lg shadow-amber-950/20">
+                  <div className="flex items-center gap-2 text-xs font-bold text-amber-300">
+                    <AlertTriangle className="h-4.5 w-4.5 text-amber-400 shrink-0" />
+                    <span>⚠️ Cross-Source Discrepancy Flagged by Event Intelligence</span>
+                  </div>
+                  <p className="text-xs text-amber-100/95 leading-relaxed font-medium">
+                    {opportunity.tracking.conflictWarning}
+                  </p>
+                  <div className="flex items-center gap-1.5 text-[11px] text-amber-300/80 pt-1 border-t border-amber-500/20">
+                    <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                    <span>Multiple sources yielded conflicting deadlines or event states. Please verify with the official organizers before key cutoffs.</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Overall Monitor Status & Check Now Button */}
               <div className="rounded-xl border border-[#1e293b] bg-[#101627] p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Globe className="h-4 w-4 text-cyan-400" />
-                    <span className="text-sm font-bold text-white">Live Website Monitor</span>
+                    <span className="text-sm font-bold text-white">Multi-Source Web Monitor</span>
                   </div>
 
-                  {opportunity.websiteUrl && (
+                  {allSourcesList.length > 0 && (
                     <button
                       onClick={() => onCheckWebsite(opportunity.id)}
                       disabled={isChecking}
                       className="flex items-center gap-1.5 rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-semibold text-black hover:bg-cyan-400 disabled:opacity-50"
                     >
                       <RefreshCw className={`h-3.5 w-3.5 ${isChecking ? 'animate-spin' : ''}`} />
-                      <span>{isChecking ? 'Checking...' : 'Check Website Now'}</span>
+                      <span>{isChecking ? 'Checking Sources...' : 'Check All Sources Now'}</span>
                     </button>
                   )}
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs pt-2 border-t border-[#1a2333]">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs pt-2 border-t border-[#1a2333]">
                   <div>
-                    <span className="text-slate-400">Current Monitoring State:</span>
+                    <span className="text-slate-400">Aggregated Status:</span>
                     <div className="font-semibold text-white mt-0.5 capitalize flex items-center gap-2">
                       {opportunity.tracking.status === 'changed' ? (
                         <span className="text-amber-400 flex items-center gap-1">
@@ -741,6 +889,13 @@ export const OpportunityDetailModal: React.FC<OpportunityDetailModalProps> = ({
                   </div>
 
                   <div>
+                    <span className="text-slate-400">Sources Monitored:</span>
+                    <div className="font-mono text-cyan-300 font-semibold mt-0.5">
+                      {allSourcesList.length} Active URL{allSourcesList.length === 1 ? '' : 's'}
+                    </div>
+                  </div>
+
+                  <div>
                     <span className="text-slate-400">Last Verified Check:</span>
                     <div className="font-mono text-slate-200 mt-0.5">
                       {opportunity.tracking.lastChecked
@@ -757,6 +912,150 @@ export const OpportunityDetailModal: React.FC<OpportunityDetailModalProps> = ({
                 )}
               </div>
 
+              {/* Monitored Sources Breakdown */}
+              <div className="rounded-xl border border-[#1e293b] bg-[#101627] p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Layers className="h-4 w-4 text-cyan-400" />
+                    <span className="text-sm font-bold text-white">Monitored Sources Breakdown</span>
+                  </div>
+                  <span className="text-[11px] text-slate-400 font-mono">
+                    {allSourcesList.length} source{allSourcesList.length === 1 ? '' : 's'} tracked
+                  </span>
+                </div>
+
+                <div className="space-y-2.5 pt-1">
+                  {allSourcesList.map((src, idx) => {
+                    const trackingData = opportunity.tracking.sources?.[src.url];
+                    const isChanged = trackingData?.status === 'changed';
+                    const isError = trackingData?.status === 'error';
+                    const isActive = trackingData?.status === 'active';
+                    return (
+                      <div
+                        key={idx}
+                        className="rounded-lg border border-[#1a2333] bg-[#0c101a] p-3 space-y-1.5"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span
+                                className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                                  src.isPrimary
+                                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                                    : 'bg-slate-800 text-slate-300 border border-slate-700'
+                                }`}
+                              >
+                                {src.label}
+                              </span>
+                              <a
+                                href={src.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-xs font-mono text-cyan-400 hover:underline truncate max-w-[280px] sm:max-w-md inline-flex items-center gap-1"
+                              >
+                                <span>{src.url}</span>
+                                <ExternalLink className="h-3 w-3 shrink-0" />
+                              </a>
+                            </div>
+                          </div>
+
+                          <div className="shrink-0">
+                            {isChanged ? (
+                              <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[10px] font-semibold text-amber-400">
+                                <Radio className="h-3 w-3" /> Changed
+                              </span>
+                            ) : isActive ? (
+                              <span className="inline-flex items-center gap-1 rounded bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-semibold text-emerald-400">
+                                <CheckCircle2 className="h-3 w-3" /> Synced
+                              </span>
+                            ) : isError ? (
+                              <span className="inline-flex items-center gap-1 rounded bg-rose-500/15 border border-rose-500/30 px-2 py-0.5 text-[10px] font-semibold text-rose-400">
+                                <AlertTriangle className="h-3 w-3" /> Failed
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 rounded bg-slate-800 px-2 py-0.5 text-[10px] font-semibold text-slate-400">
+                                <Clock className="h-3 w-3" /> Pending
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono pt-1 border-t border-[#161f30]">
+                          <div>
+                            Last checked: {trackingData?.lastChecked ? formatRelativeTime(trackingData.lastChecked) : 'Never'}
+                          </div>
+                          {trackingData?.statusCode && (
+                            <div>HTTP {trackingData.statusCode}</div>
+                          )}
+                        </div>
+
+                        {trackingData?.errorMessage && (
+                          <div className="text-[11px] text-rose-300 bg-rose-950/20 border border-rose-500/20 rounded p-1.5">
+                            {trackingData.errorMessage}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Gemini Multi-Source Intelligence */}
+              {opportunity.tracking.verifiedInfo && (
+                <div className="rounded-xl border border-cyan-500/30 bg-cyan-950/20 p-4 space-y-2.5">
+                  <div className="flex items-center gap-2 text-xs font-bold text-cyan-300">
+                    <ShieldCheck className="h-4 w-4" />
+                    <span>Gemini Reconciled Intelligence Across Sources</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                    {opportunity.tracking.verifiedInfo.detectedDeadline && (
+                      <div className="bg-[#0c101a] p-2.5 rounded-lg border border-cyan-500/20">
+                        <span className="text-[10px] text-slate-400 block">Reconciled Deadline</span>
+                        <span className="font-mono text-white font-bold">
+                          {opportunity.tracking.verifiedInfo.detectedDeadline}
+                        </span>
+                        {opportunity.tracking.verifiedInfo.keyFactsSources?.deadline && (
+                          <span className="text-[10px] text-cyan-400 block truncate mt-0.5">
+                            Source: {opportunity.tracking.verifiedInfo.keyFactsSources.deadline}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {opportunity.tracking.verifiedInfo.detectedEventDate && (
+                      <div className="bg-[#0c101a] p-2.5 rounded-lg border border-cyan-500/20">
+                        <span className="text-[10px] text-slate-400 block">Event Date</span>
+                        <span className="font-mono text-white font-bold">
+                          {opportunity.tracking.verifiedInfo.detectedEventDate}
+                        </span>
+                        {opportunity.tracking.verifiedInfo.keyFactsSources?.eventDate && (
+                          <span className="text-[10px] text-cyan-400 block truncate mt-0.5">
+                            Source: {opportunity.tracking.verifiedInfo.keyFactsSources.eventDate}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {opportunity.tracking.verifiedInfo.detectedStatus && (
+                      <div className="bg-[#0c101a] p-2.5 rounded-lg border border-cyan-500/20">
+                        <span className="text-[10px] text-slate-400 block">Status</span>
+                        <span className="font-medium text-white">
+                          {opportunity.tracking.verifiedInfo.detectedStatus}
+                        </span>
+                        {opportunity.tracking.verifiedInfo.keyFactsSources?.registrationStatus && (
+                          <span className="text-[10px] text-cyan-400 block truncate mt-0.5">
+                            Source: {opportunity.tracking.verifiedInfo.keyFactsSources.registrationStatus}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  {opportunity.tracking.verifiedInfo.summary && (
+                    <p className="text-xs text-slate-300 leading-relaxed pt-1">
+                      {opportunity.tracking.verifiedInfo.summary}
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* Change diff / Snapshot summary */}
               {opportunity.tracking.changeSummary && (
                 <div className="rounded-xl border border-amber-500/40 bg-amber-950/20 p-4 space-y-2">
@@ -772,6 +1071,43 @@ export const OpportunityDetailModal: React.FC<OpportunityDetailModalProps> = ({
                       Detected: {formatDate(opportunity.tracking.lastChangeDetectedAt)}
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Multi-Source Change Log */}
+              {opportunity.tracking.changeLog && opportunity.tracking.changeLog.length > 0 && (
+                <div className="rounded-xl border border-[#1e293b] bg-[#101627] p-4 space-y-3">
+                  <div className="flex items-center gap-2 text-xs font-bold text-white">
+                    <Clock className="h-4 w-4 text-cyan-400" />
+                    <span>Change History Across Sources ({opportunity.tracking.changeLog.length})</span>
+                  </div>
+                  <div className="space-y-2">
+                    {opportunity.tracking.changeLog.slice(0, 8).map((log) => (
+                      <div
+                        key={log.id}
+                        className="rounded-lg border border-[#1a2333] bg-[#0c101a] p-2.5 text-xs space-y-1"
+                      >
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="font-mono text-slate-400">
+                            {formatDate(log.timestamp)}
+                          </span>
+                          {log.sourceLabel && (
+                            <span className="bg-slate-800 text-cyan-300 px-1.5 py-0.5 rounded text-[10px] font-mono">
+                              {log.sourceLabel}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-white font-medium">{log.description}</div>
+                        {log.oldVal && log.newVal && (
+                          <div className="font-mono text-[11px] text-slate-400 flex items-center gap-2">
+                            <span className="line-through text-rose-400">{log.oldVal}</span>
+                            <span>→</span>
+                            <span className="text-emerald-400">{log.newVal}</span>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
