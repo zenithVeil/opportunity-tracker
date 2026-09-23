@@ -20,6 +20,7 @@ import {
   ResearchEventResult,
 } from './src/types.js';
 import { runEventResearchPipeline, fetchHtmlWithFallbacks } from './server/researchPipeline.js';
+import { isSafePublicUrl } from './server/security/urlValidator.js';
 import {
   processAssistantQuery,
   transcribeAudioWithGemini,
@@ -27,9 +28,6 @@ import {
 } from './server/assistantEngine.js';
 
 dotenv.config();
-
-const __filenameSafe = typeof import.meta?.url === 'string' ? fileURLToPath(import.meta.url) : (typeof __filename !== 'undefined' ? __filename : '');
-const __dirnameSafe = typeof __dirname !== 'undefined' ? __dirname : (__filenameSafe ? path.dirname(__filenameSafe) : process.cwd());
 
 const app = express();
 const PORT = 3000;
@@ -398,6 +396,441 @@ app.post('/api/opportunities/reset-sample', (req, res) => {
   }
 });
 
+/**
+ * Multi-source tracking check helper:
+ * Fetches all of an opportunity's sources (websiteUrl + additionalSources) in parallel using Promise.allSettled.
+ * Bounded by SSRF checks and timeouts.
+ * Reconciles facts across sources with Gemini, flags conflicts in conflictWarning,
+ * tracks per-source content hashes, and records source-specific change log entries.
+ */
+async function checkOpportunityMultiSource(
+  opp: Opportunity,
+  ai: GoogleGenAI | null,
+  timeoutMs = 9000
+): Promise<{ isChanged: boolean; message: string; success: boolean }> {
+  // 1. Gather all unique sources (primary websiteUrl + additionalSources)
+  const allUrls: { url: string; isPrimary: boolean; label: string }[] = [];
+  if (opp.websiteUrl && opp.websiteUrl.trim()) {
+    allUrls.push({
+      url: opp.websiteUrl.trim(),
+      isPrimary: true,
+      label: 'Official Website',
+    });
+  }
+  if (Array.isArray(opp.additionalSources)) {
+    for (const src of opp.additionalSources) {
+      const trimmed = typeof src === 'string' ? src.trim() : '';
+      if (trimmed && !allUrls.some((u) => u.url.toLowerCase() === trimmed.toLowerCase())) {
+        let domain = trimmed;
+        try {
+          domain = new URL(trimmed.startsWith('http') ? trimmed : `https://${trimmed}`).hostname;
+        } catch {
+          // fallback
+        }
+        allUrls.push({
+          url: trimmed,
+          isPrimary: false,
+          label: domain ? `Source (${domain})` : 'Additional Source',
+        });
+      }
+    }
+  }
+
+  if (allUrls.length === 0) {
+    opp.tracking.status = 'error';
+    opp.tracking.errorMessage = 'No valid website or source URLs configured';
+    opp.tracking.lastChecked = new Date().toISOString();
+    return { isChanged: false, message: 'No URLs configured', success: false };
+  }
+
+  const checkedAt = new Date().toISOString();
+  if (!opp.tracking.sources) {
+    opp.tracking.sources = {};
+  }
+
+  type FetchSourceSuccess = {
+    success: true;
+    url: string;
+    isPrimary: boolean;
+    label: string;
+    html: string;
+    status: number;
+    title: string;
+    metaDescription: string;
+    text: string;
+    hash: string;
+  };
+
+  type FetchSourceFailure = {
+    success: false;
+    url: string;
+    isPrimary: boolean;
+    label: string;
+    errorMessage: string;
+    statusCode: number;
+  };
+
+  type FetchSourceResult = FetchSourceSuccess | FetchSourceFailure;
+
+  // 2. Fetch all sources in parallel via Promise.allSettled
+  const fetchTasks: Promise<FetchSourceResult>[] = allUrls.map(async (item): Promise<FetchSourceResult> => {
+    let validUrl: URL;
+    try {
+      validUrl = new URL(item.url.startsWith('http') ? item.url : `https://${item.url}`);
+    } catch {
+      return {
+        ...item,
+        success: false,
+        errorMessage: 'Invalid URL format',
+        statusCode: 400,
+      };
+    }
+
+    // SSRF verification
+    const isSafe = await isSafePublicUrl(validUrl.toString());
+    if (!isSafe) {
+      return {
+        ...item,
+        success: false,
+        errorMessage: 'Blocked by SSRF security policy',
+        statusCode: 403,
+      };
+    }
+
+    const fetchResult = await fetchHtmlWithFallbacks(validUrl.toString(), timeoutMs);
+    if (!fetchResult) {
+      return {
+        ...item,
+        success: false,
+        errorMessage: 'Unable to connect to website (network or SSL error)',
+        statusCode: 502,
+      };
+    }
+
+    const { title, metaDescription, text } = extractTextFromHtml(fetchResult.html);
+    const hash = computeHash(`${title}|${metaDescription}|${text.slice(0, 1500)}`);
+
+    return {
+      ...item,
+      success: true,
+      html: fetchResult.html,
+      status: fetchResult.status,
+      title,
+      metaDescription,
+      text,
+      hash,
+    };
+  });
+
+  const settled = await Promise.allSettled(fetchTasks);
+
+  const successfulSources: FetchSourceSuccess[] = [];
+  const failedSources: FetchSourceFailure[] = [];
+
+  for (let i = 0; i < settled.length; i++) {
+    const outcome = settled[i];
+    if (outcome.status === 'fulfilled') {
+      const res = outcome.value;
+      if (res.success === true) {
+        successfulSources.push(res);
+      } else {
+        failedSources.push(res as FetchSourceFailure);
+      }
+    } else {
+      const orig = allUrls[i];
+      failedSources.push({
+        success: false,
+        url: orig.url,
+        isPrimary: orig.isPrimary,
+        label: orig.label,
+        errorMessage: outcome.reason?.message || 'Connection timed out',
+        statusCode: 504,
+      });
+    }
+  }
+
+  // Record failed sources into per-source tracking map
+  for (const failed of failedSources) {
+    const prevSrc = opp.tracking.sources[failed.url] || {
+      url: failed.url,
+      sourceLabel: failed.label,
+    };
+    opp.tracking.sources[failed.url] = {
+      ...prevSrc,
+      url: failed.url,
+      sourceLabel: failed.label,
+      status: 'error',
+      statusCode: failed.statusCode,
+      errorMessage: failed.errorMessage,
+      lastChecked: checkedAt,
+    };
+  }
+
+  // If ALL sources failed, mark opportunity tracking status as error
+  if (successfulSources.length === 0) {
+    opp.tracking.status = 'error';
+    opp.tracking.errorMessage = failedSources.map((f) => `${f.label}: ${f.errorMessage}`).join('; ');
+    opp.tracking.lastChecked = checkedAt;
+    opp.tracking.failedAttemptsCount = (opp.tracking.failedAttemptsCount || 0) + 1;
+
+    // Repeated failure notification
+    if (opp.tracking.failedAttemptsCount >= 2) {
+      const notifs = loadNotifications();
+      notifs.unshift({
+        id: `notif_err_${Date.now()}`,
+        type: 'website_error',
+        opportunityId: opp.id,
+        opportunityName: opp.name,
+        title: 'Website Monitoring Alert',
+        message: `Unable to access sources for "${opp.name}" repeatedly.`,
+        timestamp: checkedAt,
+        read: false,
+        urgency: 'medium',
+      });
+      saveNotifications(notifs);
+    }
+
+    return {
+      isChanged: false,
+      message: opp.tracking.errorMessage,
+      success: false,
+    };
+  }
+
+  // At least one source succeeded! Reset failure count
+  opp.tracking.failedAttemptsCount = 0;
+
+  // 3. Per-source change detection
+  let anySourceChanged = false;
+  const changeLogEntries: ChangeLogEntry[] = opp.tracking.changeLog || [];
+
+  for (const src of successfulSources) {
+    const existingPerSource = opp.tracking.sources[src.url];
+    // Check previous hash for this source, fallback to opp.tracking.contentHash if primary and never initialized
+    const prevSourceHash = existingPerSource?.contentHash || (src.isPrimary ? opp.tracking.contentHash : undefined);
+    const hasSourceChanged = Boolean(prevSourceHash && prevSourceHash !== src.hash);
+
+    if (hasSourceChanged) {
+      anySourceChanged = true;
+      const entry: ChangeLogEntry = {
+        id: `cl_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        timestamp: checkedAt,
+        field: 'content',
+        oldVal: prevSourceHash || 'Initial',
+        newVal: src.hash,
+        description: `${src.label} content changed`,
+        sourceUrl: src.url,
+        sourceLabel: src.label,
+      };
+      changeLogEntries.unshift(entry);
+    }
+
+    opp.tracking.sources[src.url] = {
+      url: src.url,
+      sourceLabel: src.label,
+      contentHash: src.hash,
+      status: hasSourceChanged ? 'changed' : 'active',
+      statusCode: src.status,
+      errorMessage: undefined,
+      lastChecked: checkedAt,
+      previousSnapshot: {
+        checkedAt,
+        title: src.title,
+        textSnippet: src.text.slice(0, 300),
+        contentHash: src.hash,
+      },
+    };
+  }
+
+  // 4. Multi-source reconciliation with Gemini
+  let detectedDeadline = '';
+  let detectedEventDate = '';
+  let detectedStatus = '';
+  let announcements: string[] = [];
+  let summary = '';
+  let conflictWarning = '';
+  let keyFactsSources: Record<string, string> = {};
+
+  if (ai) {
+    try {
+      const sourceSections = successfulSources
+        .map(
+          (s) => `--- SOURCE: ${s.label} (${s.url}) ---
+Page Title: ${s.title}
+Page Description: ${s.metaDescription || 'None'}
+Page Content Excerpt:
+${s.text.slice(0, 3500)}`
+        )
+        .join('\n\n');
+
+      const prompt = `You are an event intelligence engine analyzing multiple monitored web sources for the opportunity "${opp.name}".
+Monitored sources count: ${successfulSources.length} (${successfulSources.map((s) => s.url).join(', ')})
+Current recorded deadline: ${opp.deadline || 'None'}
+Current recorded event date: ${opp.eventDate || 'None'}
+
+Here is the retrieved content from each source:
+${sourceSections}
+
+Tasks:
+1. Reconcile all sources together to determine:
+   - detectedDeadline: The most likely correct registration/submission deadline (YYYY-MM-DD or exact date text). If not found, say null.
+   - detectedEventDate: The most likely correct event start date (YYYY-MM-DD or text). If not found, say null.
+   - detectedStatus: The current registration or application status (e.g. "Registration Open", "Submissions Closed", "Applications Live", "Upcoming").
+   - announcements: Array of up to 3 critical recent announcements or updates found across the sources.
+   - summary: 1-2 sentence concise summary of the event status across all sources.
+2. Cross-Source Conflict Detection:
+   - conflictWarning: Check if the sources DISAGREE on key facts (for example, "Devpost states deadline is Oct 20 while Official Website states Oct 25").
+     If there is a conflict or discrepancy between sources, explicitly describe the disagreement clearly so the user can verify manually.
+     If there is NO conflict, or all sources agree, or only 1 source was available, set conflictWarning to null.
+3. Source Attribution:
+   - keyFactsSources: Object mapping each key fact ('deadline', 'eventDate', 'registrationStatus') to the exact source URL from which it was derived.`;
+
+      const response = await generateWithFallbacks(ai, {
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              detectedDeadline: { type: Type.STRING },
+              detectedEventDate: { type: Type.STRING },
+              detectedStatus: { type: Type.STRING },
+              announcements: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+              },
+              summary: { type: Type.STRING },
+              conflictWarning: { type: Type.STRING },
+              keyFactsSources: {
+                type: Type.OBJECT,
+                properties: {
+                  deadline: { type: Type.STRING },
+                  eventDate: { type: Type.STRING },
+                  registrationStatus: { type: Type.STRING },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (response.text) {
+        const parsed = JSON.parse(response.text);
+        detectedDeadline = parsed.detectedDeadline || '';
+        detectedEventDate = parsed.detectedEventDate || '';
+        detectedStatus = parsed.detectedStatus || '';
+        announcements = parsed.announcements || [];
+        summary = parsed.summary || '';
+        conflictWarning = parsed.conflictWarning || '';
+        keyFactsSources = parsed.keyFactsSources || {};
+      }
+    } catch (geminiErr) {
+      console.error('Gemini multi-source analysis error:', geminiErr);
+      const primary = successfulSources.find((s) => s.isPrimary) || successfulSources[0];
+      summary = primary.metaDescription || primary.title || 'Checked sources successfully';
+      detectedStatus = 'Active';
+    }
+  } else {
+    const primary = successfulSources.find((s) => s.isPrimary) || successfulSources[0];
+    summary = primary.metaDescription || `${primary.title} checked across ${successfulSources.length} sources`;
+    detectedStatus = 'Active';
+  }
+
+  // Cross-source conflict notification if newly detected
+  if (conflictWarning && conflictWarning !== opp.tracking.conflictWarning) {
+    const notifs = loadNotifications();
+    notifs.unshift({
+      id: `notif_conf_${Date.now()}`,
+      type: 'website_changed',
+      opportunityId: opp.id,
+      opportunityName: opp.name,
+      title: `Source Discrepancy Flagged for ${opp.name}`,
+      message: conflictWarning,
+      timestamp: checkedAt,
+      read: false,
+      urgency: 'high',
+    });
+    saveNotifications(notifs);
+  }
+
+  // Deadline change notification
+  const prevSnapshotDeadline = opp.tracking.previousSnapshot?.detectedDeadline;
+  if (detectedDeadline && prevSnapshotDeadline && detectedDeadline !== prevSnapshotDeadline) {
+    anySourceChanged = true;
+    const deadlineSourceUrl = keyFactsSources.deadline || opp.websiteUrl;
+    const deadlineEntry: ChangeLogEntry = {
+      id: `cl_dl_${Date.now()}`,
+      timestamp: checkedAt,
+      field: 'deadline',
+      oldVal: prevSnapshotDeadline,
+      newVal: detectedDeadline,
+      description: `Updated deadline detected: ${detectedDeadline}`,
+      sourceUrl: deadlineSourceUrl,
+      sourceLabel: 'Monitored Sources',
+    };
+    changeLogEntries.unshift(deadlineEntry);
+
+    const notifs = loadNotifications();
+    notifs.unshift({
+      id: `notif_chg_${Date.now()}`,
+      type: 'website_changed',
+      opportunityId: opp.id,
+      opportunityName: opp.name,
+      title: `Deadline Changed on Monitored Sources!`,
+      message: `Updated deadline on ${opp.name}: ${detectedDeadline}${conflictWarning ? ` (${conflictWarning})` : ''}`,
+      timestamp: checkedAt,
+      read: false,
+      urgency: 'high',
+    });
+    saveNotifications(notifs);
+  }
+
+  // Primary source info
+  const primarySource = successfulSources.find((s) => s.isPrimary) || successfulSources[0];
+  const primaryHash = primarySource.hash;
+
+  opp.tracking = {
+    ...opp.tracking,
+    lastChecked: checkedAt,
+    status: anySourceChanged ? 'changed' : 'active',
+    statusCode: primarySource.status,
+    contentHash: primaryHash,
+    errorMessage: failedSources.length > 0
+      ? `Notice: ${failedSources.length} source(s) unreachable (${failedSources.map((f) => f.label).join(', ')})`
+      : undefined,
+    conflictWarning: conflictWarning || undefined,
+    sources: opp.tracking.sources,
+    verifiedInfo: {
+      title: primarySource.title,
+      detectedDeadline: detectedDeadline || undefined,
+      detectedEventDate: detectedEventDate || undefined,
+      detectedStatus: detectedStatus || 'Active',
+      announcements,
+      summary: summary || primarySource.title,
+      keyFactsSources,
+    },
+    previousSnapshot: {
+      checkedAt,
+      title: primarySource.title,
+      textSnippet: primarySource.text.slice(0, 300),
+      detectedDeadline,
+    },
+    changeLog: changeLogEntries,
+  };
+
+  const statusMsg = anySourceChanged
+    ? 'Changes detected on monitored source(s)!'
+    : conflictWarning
+      ? 'Checked sources: Source discrepancy flagged!'
+      : `Checked ${successfulSources.length} source(s) successfully. No critical changes detected.`;
+
+  return {
+    isChanged: anySourceChanged,
+    message: statusMsg,
+    success: true,
+  };
+}
+
 // POST Server-side Website Monitoring: check single opportunity
 app.post('/api/tracking/check/:id', async (req, res) => {
   const { id } = req.params;
@@ -410,282 +843,52 @@ app.post('/api/tracking/check/:id', async (req, res) => {
   }
 
   const opp = items[index];
-  const targetUrl = opp.websiteUrl;
-
-  if (!targetUrl) {
-    res.status(400).json({ error: 'No website URL configured for this opportunity.' });
-    return;
-  }
-
-  // Strict rule: NEVER pretend a website was checked if it was not actually checked.
-  // Validate URL format
-  let validUrl: URL;
-  try {
-    validUrl = new URL(targetUrl.startsWith('http') ? targetUrl : `https://${targetUrl}`);
-  } catch {
-    opp.tracking.status = 'error';
-    opp.tracking.errorMessage = 'Unable to check website: Invalid URL format';
-    opp.tracking.lastChecked = new Date().toISOString();
-    opp.tracking.failedAttemptsCount = (opp.tracking.failedAttemptsCount || 0) + 1;
-    saveOpportunities(items);
-    res.json({ success: false, opportunity: opp, message: 'Invalid URL format' });
-    return;
-  }
+  const ai = getGeminiClient();
 
   try {
-    // Perform resilient server-side fetch with fallbacks (handles TLS mismatches, www. subdomain cert issues, etc.)
-    const fetchResult = await fetchHtmlWithFallbacks(validUrl.toString(), 9000);
-
-    if (!fetchResult) {
-      opp.tracking.status = 'error';
-      opp.tracking.statusCode = 502;
-      opp.tracking.errorMessage = `Unable to connect to website (network or SSL error)`;
-      opp.tracking.lastChecked = new Date().toISOString();
-      opp.tracking.failedAttemptsCount = (opp.tracking.failedAttemptsCount || 0) + 1;
-
-      // Repeated failure notification
-      if (opp.tracking.failedAttemptsCount >= 2) {
-        const notifs = loadNotifications();
-        notifs.unshift({
-          id: `notif_err_${Date.now()}`,
-          type: 'website_error',
-          opportunityId: opp.id,
-          opportunityName: opp.name,
-          title: 'Website Monitoring Alert',
-          message: `Unable to access website for "${opp.name}" repeatedly.`,
-          timestamp: new Date().toISOString(),
-          read: false,
-          urgency: 'medium',
-        });
-        saveNotifications(notifs);
-      }
-
-      saveOpportunities(items);
-      res.json({ success: false, opportunity: opp, message: opp.tracking.errorMessage });
-      return;
-    }
-
-    const html = fetchResult.html;
-    const { title, metaDescription, text } = extractTextFromHtml(html);
-    const newHash = computeHash(`${title}|${metaDescription}|${text.slice(0, 1500)}`);
-    const checkedAt = new Date().toISOString();
-
-    // AI/Regex analysis of the webpage text
-    let detectedDeadline = '';
-    let detectedEventDate = '';
-    let detectedStatus = '';
-    let announcements: string[] = [];
-    let summary = '';
-
-    const ai = getGeminiClient();
-    if (ai && text.length > 50) {
-      try {
-        const prompt = `Analyze this webpage content for the event/opportunity "${opp.name}".
-Current stored deadline: ${opp.deadline}
-Current stored event date: ${opp.eventDate || 'None'}
-Webpage Title: ${title}
-Webpage Content Sample:
-${text.slice(0, 4500)}
-
-Task:
-Extract with high precision:
-1. Registration or submission deadline (YYYY-MM-DD or exact date text found on page). If not found, say null.
-2. Event start date (YYYY-MM-DD or text). If not found, say null.
-3. Registration status (e.g. "Registration Open", "Submissions Closed", "Applications Live", "Upcoming").
-4. Any critical announcements (e.g., date changes, extensions, format changes). List up to 2 items.
-5. 1-sentence brief summary of the status on the page.`;
-
-        const response = await generateWithFallbacks(ai, {
-          contents: prompt,
-          config: {
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                detectedDeadline: { type: Type.STRING },
-                detectedEventDate: { type: Type.STRING },
-                detectedStatus: { type: Type.STRING },
-                announcements: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING },
-                },
-                summary: { type: Type.STRING },
-              },
-            },
-          },
-        });
-
-        if (response.text) {
-          const parsed = JSON.parse(response.text);
-          detectedDeadline = parsed.detectedDeadline || '';
-          detectedEventDate = parsed.detectedEventDate || '';
-          detectedStatus = parsed.detectedStatus || '';
-          announcements = parsed.announcements || [];
-          summary = parsed.summary || '';
-        }
-      } catch (geminiErr) {
-        console.error('Gemini analysis error during tracking check:', geminiErr);
-        // Fallback to text matching
-        summary = metaDescription || title;
-      }
-    } else {
-      // Fallback without AI: use page title and meta description
-      summary = metaDescription || `${title} checked successfully`;
-      detectedStatus = 'Website Active';
-    }
-
-    // Change Detection logic
-    const prev = opp.tracking.previousSnapshot;
-    const prevHash = opp.tracking.contentHash;
-    const hasHashChanged = prevHash && prevHash !== newHash;
-    const changeLogEntries: ChangeLogEntry[] = opp.tracking.changeLog || [];
-    let isChanged = false;
-
-    // Check if detected deadline differs from previous snapshot or stored deadline
-    if (detectedDeadline && prev?.detectedDeadline && detectedDeadline !== prev.detectedDeadline) {
-      isChanged = true;
-      const entry: ChangeLogEntry = {
-        id: `cl_${Date.now()}_1`,
-        timestamp: checkedAt,
-        field: 'deadline',
-        oldVal: prev.detectedDeadline,
-        newVal: detectedDeadline,
-        description: `Website updated deadline from ${prev.detectedDeadline} to ${detectedDeadline}`,
-      };
-      changeLogEntries.unshift(entry);
-
-      // Create notification
-      const notifs = loadNotifications();
-      notifs.unshift({
-        id: `notif_chg_${Date.now()}`,
-        type: 'website_changed',
-        opportunityId: opp.id,
-        opportunityName: opp.name,
-        title: `Deadline Changed on Website!`,
-        message: `Detected updated deadline on ${opp.name} website: ${detectedDeadline}`,
-        timestamp: checkedAt,
-        read: false,
-        urgency: 'high',
-      });
-      saveNotifications(notifs);
-    } else if (hasHashChanged && announcements.length > 0) {
-      isChanged = true;
-      const entry: ChangeLogEntry = {
-        id: `cl_${Date.now()}_2`,
-        timestamp: checkedAt,
-        field: 'announcements',
-        oldVal: prev?.textSnippet?.slice(0, 80) || 'Previous snapshot',
-        newVal: announcements[0],
-        description: `New announcement: ${announcements[0]}`,
-      };
-      changeLogEntries.unshift(entry);
-
-      const notifs = loadNotifications();
-      notifs.unshift({
-        id: `notif_ann_${Date.now()}`,
-        type: 'website_changed',
-        opportunityId: opp.id,
-        opportunityName: opp.name,
-        title: `New Update on ${opp.name}`,
-        message: announcements[0],
-        timestamp: checkedAt,
-        read: false,
-        urgency: 'medium',
-      });
-      saveNotifications(notifs);
-    }
-
-    // Update tracking info
-    opp.tracking = {
-      lastChecked: checkedAt,
-      status: isChanged ? 'changed' : 'active',
-      statusCode: fetchResult.status,
-      contentHash: newHash,
-      errorMessage: undefined,
-      failedAttemptsCount: 0,
-      verifiedInfo: {
-        title,
-        detectedDeadline: detectedDeadline || undefined,
-        detectedEventDate: detectedEventDate || undefined,
-        detectedStatus: detectedStatus || 'Active',
-        announcements,
-        summary: summary || title,
-      },
-      previousSnapshot: {
-        checkedAt,
-        title,
-        textSnippet: text.slice(0, 300),
-        detectedDeadline,
-      },
-      changeLog: changeLogEntries,
-    };
-
+    const result = await checkOpportunityMultiSource(opp, ai, 9000);
     saveOpportunities(items);
     res.json({
-      success: true,
+      success: result.success,
       opportunity: opp,
-      isChanged,
-      message: isChanged ? 'Changes detected on website!' : 'Website checked. No critical changes detected.',
+      isChanged: result.isChanged,
+      message: result.message,
     });
-  } catch (fetchErr: any) {
-    console.error('Tracking fetch error:', fetchErr);
-    const isTimeout = fetchErr.name === 'AbortError';
-    const errorMsg = isTimeout
-      ? 'Unable to check website: Request timed out'
-      : `Unable to check website: ${fetchErr.message || 'Connection failed'}`;
-
-    opp.tracking.status = 'error';
-    opp.tracking.errorMessage = errorMsg;
-    opp.tracking.lastChecked = new Date().toISOString();
-    opp.tracking.failedAttemptsCount = (opp.tracking.failedAttemptsCount || 0) + 1;
-
-    saveOpportunities(items);
-    res.json({ success: false, opportunity: opp, message: errorMsg });
+  } catch (err: any) {
+    console.error('Tracking check handler error:', err);
+    res.status(500).json({ error: err.message || 'Failed to check opportunity sources' });
   }
 });
 
 // POST Check all websites
 app.post('/api/tracking/check-all', async (req, res) => {
   const items = loadOpportunities();
-  const trackable = items.filter((o) => o.websiteUrl && o.websiteUrl.startsWith('http'));
+  const trackable = items.filter(
+    (o) =>
+      (o.websiteUrl && o.websiteUrl.trim().length > 0) ||
+      (Array.isArray(o.additionalSources) && o.additionalSources.length > 0)
+  );
 
   let checkedCount = 0;
   let changedCount = 0;
   let errorCount = 0;
 
-  for (const opp of trackable.slice(0, 10)) { // limit batch size to 10 for speed
+  const ai = getGeminiClient();
+
+  // Process batch of trackable opportunities
+  for (const opp of trackable.slice(0, 10)) {
     try {
-      const fetchResult = await fetchHtmlWithFallbacks(opp.websiteUrl, 6000);
-      const checkedAt = new Date().toISOString();
-
-      if (fetchResult) {
+      const outcome = await checkOpportunityMultiSource(opp, ai, 6000);
+      if (outcome.success) {
         checkedCount++;
-        const html = fetchResult.html;
-        const { title, text } = extractTextFromHtml(html);
-        const newHash = computeHash(`${title}|${text.slice(0, 1000)}`);
-        const prevHash = opp.tracking.contentHash;
-
-        if (prevHash && prevHash !== newHash) {
+        if (outcome.isChanged) {
           changedCount++;
-          opp.tracking.status = 'changed';
-        } else {
-          opp.tracking.status = 'active';
         }
-        opp.tracking.lastChecked = checkedAt;
-        opp.tracking.contentHash = newHash;
-        opp.tracking.statusCode = fetchResult.status;
-        opp.tracking.errorMessage = undefined;
       } else {
         errorCount++;
-        opp.tracking.status = 'error';
-        opp.tracking.errorMessage = `Unable to connect to website`;
-        opp.tracking.lastChecked = checkedAt;
       }
     } catch {
       errorCount++;
-      opp.tracking.status = 'error';
-      opp.tracking.errorMessage = 'Unable to check website: Connection timed out or failed';
-      opp.tracking.lastChecked = new Date().toISOString();
     }
   }
 

@@ -366,33 +366,58 @@ export async function fetchHtmlWithFallbacks(
 
   for (const cand of candidates) {
     try {
-      // 1. Enforce strict SSRF protection before initiating request
-      const isSafe = await isSafePublicUrl(cand);
-      if (!isSafe) {
-        console.warn(`[SSRF Guard] Blocked request to prohibited or private destination: ${cand}`);
-        continue;
-      }
+      let currentUrl = cand;
+      let hops = 0;
+      const maxHops = 5;
 
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-      const res = await fetch(cand, {
-        signal: controller.signal,
-        redirect: 'follow',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 OpportunityTrackerResearch/2.0',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-        },
-      });
-      clearTimeout(timer);
-
-      if (res.ok) {
-        // Enforce maximum body size (5MB) to protect against memory exhaustion
-        const html = await res.text();
-        if (html && html.length > 50 && html.length <= 5 * 1024 * 1024) {
-          return { html, finalUrl: cand, status: res.status };
+      while (hops <= maxHops) {
+        // Enforce strict SSRF protection before initiating request or redirect
+        const isSafe = await isSafePublicUrl(currentUrl);
+        if (!isSafe) {
+          console.warn(`[SSRF Guard] Blocked request to prohibited or private destination: ${currentUrl}`);
+          break;
         }
+
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+        let res: Response;
+        try {
+          res = await fetch(currentUrl, {
+            signal: controller.signal,
+            redirect: 'manual',
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 OpportunityTrackerResearch/2.0',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'en-US,en;q=0.9',
+            },
+          });
+        } finally {
+          clearTimeout(timer);
+        }
+
+        // Handle redirects manually to re-validate destination with SSRF check
+        if ([301, 302, 303, 307, 308].includes(res.status)) {
+          const location = res.headers.get('location');
+          if (!location) break;
+          // Resolve relative or absolute redirect safely
+          try {
+            currentUrl = new URL(location, currentUrl).toString();
+          } catch {
+            break;
+          }
+          hops++;
+          continue;
+        }
+
+        if (res.ok) {
+          // Enforce maximum body size (5MB) to protect against memory exhaustion
+          const html = await res.text();
+          if (html && html.length > 50 && html.length <= 5 * 1024 * 1024) {
+            return { html, finalUrl: currentUrl, status: res.status };
+          }
+        }
+        break;
       }
     } catch {
       // Graceful timeout or network failure handling
