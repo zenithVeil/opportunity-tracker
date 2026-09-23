@@ -31,7 +31,7 @@ import { checkOpportunityMultiSource } from './server/multiSourceTracker.js';
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 // Security and sanity headers
 app.use((req, res, next) => {
