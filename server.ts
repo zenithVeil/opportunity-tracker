@@ -6,7 +6,20 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 import { INITIAL_SAMPLE_OPPORTUNITIES, INITIAL_NOTIFICATIONS } from './src/data/defaultOpportunities.js';
-import { JsonFileStorage } from './server/storage.js';
+import {
+  JsonFileStorage,
+  loadOpportunities,
+  saveOpportunities,
+  loadNotifications,
+  saveNotifications,
+  loadSettings,
+  saveSettings,
+  loadVoiceNotes,
+  saveVoiceNotes,
+  configureStorageFallbacks,
+  initializeStorage,
+} from './server/storage.js';
+import { initializeDatabaseSchema } from './server/schema.js';
 import {
   Opportunity,
   OpportunityStatus,
@@ -31,7 +44,9 @@ import { checkOpportunityMultiSource } from './server/multiSourceTracker.js';
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const PORT = process.env.NODE_ENV === 'production' && process.env.PORT
+  ? parseInt(process.env.PORT, 10)
+  : 3000;
 
 // Security and sanity headers
 app.use((req, res, next) => {
@@ -96,58 +111,17 @@ const DEFAULT_SETTINGS: NotificationSettings = {
   notifyOnOverdueTasks: true,
 };
 
-// Resilient atomic storage handlers (never overwrite corrupted files with samples)
-const opportunitiesStorage = new JsonFileStorage<Opportunity[]>(
-  OPPORTUNITIES_FILE,
-  INITIAL_SAMPLE_OPPORTUNITIES
-);
-
-const notificationsStorage = new JsonFileStorage<AppNotification[]>(
-  NOTIFICATIONS_FILE,
-  INITIAL_NOTIFICATIONS
-);
-
-const settingsStorage = new JsonFileStorage<NotificationSettings>(
-  SETTINGS_FILE,
-  DEFAULT_SETTINGS
-);
-
-const voiceNotesStorage = new JsonFileStorage<VoiceNote[]>(
-  VOICE_NOTES_FILE,
-  INITIAL_VOICE_NOTES
-);
-
-function loadOpportunities(): Opportunity[] {
-  return opportunitiesStorage.load();
-}
-
-function saveOpportunities(items: Opportunity[]): void {
-  opportunitiesStorage.save(items);
-}
-
-function loadNotifications(): AppNotification[] {
-  return notificationsStorage.load();
-}
-
-function saveNotifications(items: AppNotification[]): void {
-  notificationsStorage.save(items);
-}
-
-function loadSettings(): NotificationSettings {
-  return settingsStorage.load();
-}
-
-function saveSettings(settings: NotificationSettings): void {
-  settingsStorage.save(settings);
-}
-
-function loadVoiceNotes(): VoiceNote[] {
-  return voiceNotesStorage.load();
-}
-
-function saveVoiceNotes(items: VoiceNote[]): void {
-  voiceNotesStorage.save(items);
-}
+// Configure file-level fallbacks
+configureStorageFallbacks({
+  opportunitiesFile: OPPORTUNITIES_FILE,
+  notificationsFile: NOTIFICATIONS_FILE,
+  settingsFile: SETTINGS_FILE,
+  voiceNotesFile: VOICE_NOTES_FILE,
+  initialOpportunities: INITIAL_SAMPLE_OPPORTUNITIES,
+  initialNotifications: INITIAL_NOTIFICATIONS,
+  defaultSettings: DEFAULT_SETTINGS,
+  initialVoiceNotes: INITIAL_VOICE_NOTES,
+});
 
 // Resilient model caller with automatic fallbacks for 503/high-demand spikes
 async function generateWithFallbacks(
@@ -1308,6 +1282,18 @@ app.put('/api/settings', (req, res) => {
 
 // ================= VITE MIDDLEWARE / SPA SERVING =================
 async function startServer() {
+  try {
+    await initializeDatabaseSchema();
+    await initializeStorage({
+      initialOpportunities: INITIAL_SAMPLE_OPPORTUNITIES,
+      initialNotifications: INITIAL_NOTIFICATIONS,
+      defaultSettings: DEFAULT_SETTINGS,
+      initialVoiceNotes: INITIAL_VOICE_NOTES,
+    });
+  } catch (initErr) {
+    console.warn('[Startup] Database initialization encountered a warning, using available local cache/fallbacks:', initErr);
+  }
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
